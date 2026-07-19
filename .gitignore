@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 签名产物（证书、密钥、Profile、签名后的 hap）
+signing_files/
+output/
+
+# 反编译参考源码（不参与运行，体积过大）
+reverse/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
