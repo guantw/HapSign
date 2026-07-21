@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.hap binary
+*.cer binary
+*.p7b binary
+*.p12 binary

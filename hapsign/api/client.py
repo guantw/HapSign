@@ -7,7 +7,7 @@
 - code=4000 或 HTTP 401 表示 token 失效
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 
@@ -50,7 +50,7 @@ class HuaweiSignClient:
         self.uid = uid
         self.base_url = base_url.rstrip("/")
 
-    def _get_headers(self, team_id: Optional[str] = None) -> Dict[str, str]:
+    def _get_headers(self, team_id: str | None = None) -> dict[str, str]:
         """构造请求头。
 
         Args:
@@ -91,9 +91,7 @@ class HuaweiSignClient:
         if resp.status_code == 401:
             phrase = resp.reason or ""
             if "accessToken invalid" in phrase or "getTokenInfo return null" in phrase:
-                raise TokenExpiredError(
-                    f"Token 失效（HTTP 401）: {phrase}"
-                )
+                raise TokenExpiredError(f"Token 失效（HTTP 401）: {phrase}")
             raise TokenExpiredError(f"HTTP 401: {phrase}")
 
         # 部分接口在 200 响应中返回 code=4000 表示 token 失效
@@ -115,9 +113,9 @@ class HuaweiSignClient:
     def _do_get(
         self,
         url: str,
-        headers: Dict[str, str],
-        params: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        headers: dict[str, str],
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """执行 GET 请求并返回解析后的 JSON。"""
         full_url = self._build_url(url)
         resp = requests.get(full_url, headers=headers, params=params, timeout=30)
@@ -128,9 +126,9 @@ class HuaweiSignClient:
     def _do_post_form(
         self,
         url: str,
-        headers: Dict[str, str],
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        headers: dict[str, str],
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """执行 POST form-encoded 请求并返回解析后的 JSON。"""
         full_url = self._build_url(url)
         resp = requests.post(full_url, headers=headers, data=params, timeout=30)
@@ -141,14 +139,12 @@ class HuaweiSignClient:
     def _do_post_json(
         self,
         url: str,
-        headers: Dict[str, str],
-        data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        headers: dict[str, str],
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """执行 POST JSON 请求并返回解析后的 JSON。"""
         full_url = self._build_url(url)
-        resp = requests.post(
-            full_url, headers=headers, json=data, timeout=30
-        )
+        resp = requests.post(full_url, headers=headers, json=data, timeout=30)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.json()
@@ -156,14 +152,12 @@ class HuaweiSignClient:
     def _do_delete(
         self,
         url: str,
-        headers: Dict[str, str],
-        data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        headers: dict[str, str],
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """执行 DELETE 请求（带 JSON body）并返回解析后的 JSON。"""
         full_url = self._build_url(url)
-        resp = requests.delete(
-            full_url, headers=headers, json=data, timeout=30
-        )
+        resp = requests.delete(full_url, headers=headers, json=data, timeout=30)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.json()
@@ -171,8 +165,8 @@ class HuaweiSignClient:
     def _do_post_form_text(
         self,
         url: str,
-        headers: Dict[str, str],
-        params: Optional[Dict[str, Any]] = None,
+        headers: dict[str, str],
+        params: dict[str, Any] | None = None,
     ) -> str:
         """执行 POST form-encoded 请求并返回原始响应文本。
 
@@ -188,14 +182,12 @@ class HuaweiSignClient:
     def _do_delete_text(
         self,
         url: str,
-        headers: Dict[str, str],
-        data: Optional[Dict[str, Any]] = None,
+        headers: dict[str, str],
+        data: dict[str, Any] | None = None,
     ) -> str:
         """执行 DELETE 请求（带 JSON body）并返回原始响应文本。"""
         full_url = self._build_url(url)
-        resp = requests.delete(
-            full_url, headers=headers, json=data, timeout=30
-        )
+        resp = requests.delete(full_url, headers=headers, json=data, timeout=30)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.text
@@ -203,8 +195,8 @@ class HuaweiSignClient:
     def _do_post_json_text(
         self,
         url: str,
-        headers: Dict[str, str],
-        data: Optional[Dict[str, Any]] = None,
+        headers: dict[str, str],
+        data: dict[str, Any] | None = None,
     ) -> str:
         """执行 POST JSON 请求并返回原始响应文本。
 
@@ -212,9 +204,7 @@ class HuaweiSignClient:
         Java 通过 responseContent.contains('"code":0') 检查成功。
         """
         full_url = self._build_url(url)
-        resp = requests.post(
-            full_url, headers=headers, json=data, timeout=30
-        )
+        resp = requests.post(full_url, headers=headers, json=data, timeout=30)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.text

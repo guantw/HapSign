@@ -44,13 +44,20 @@ class KeytoolUtil:
         cmd = [
             keytool,
             "-genkeypair",
-            "-alias", alias,
-            "-keyalg", config.KEY_ALG,
-            "-keysize", config.KEY_SIZE,
-            "-validity", str(config.KEY_VALIDITY_DAYS),
-            "-keystore", keystore_path,
-            "-storepass", password,
-            "-dname", config.KEY_DNAME,
+            "-alias",
+            alias,
+            "-keyalg",
+            config.KEY_ALG,
+            "-keysize",
+            config.KEY_SIZE,
+            "-validity",
+            str(config.KEY_VALIDITY_DAYS),
+            "-keystore",
+            keystore_path,
+            "-storepass",
+            password,
+            "-dname",
+            config.KEY_DNAME,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -85,11 +92,16 @@ class KeytoolUtil:
         cmd = [
             keytool,
             "-certreq",
-            "-alias", alias,
-            "-keystore", keystore_path,
-            "-storepass", password,
-            "-file", csr_path,
-            "-sigalg", config.SIGN_ALG,
+            "-alias",
+            alias,
+            "-keystore",
+            keystore_path,
+            "-storepass",
+            password,
+            "-file",
+            csr_path,
+            "-sigalg",
+            config.SIGN_ALG,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -98,7 +110,7 @@ class KeytoolUtil:
                 f"{result.stderr.strip() or result.stdout.strip()}"
             )
         try:
-            with open(csr_path, "r", encoding="utf-8") as f:
+            with open(csr_path, encoding="utf-8") as f:
                 return f.read()
         except OSError as e:
-            raise RuntimeError(f"无法读取生成的 CSR 文件 {csr_path}: {e}")
+            raise RuntimeError(f"无法读取生成的 CSR 文件 {csr_path}: {e}") from e

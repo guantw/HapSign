@@ -1,10 +1,10 @@
-"""全流程编排：登录 → token 交换 → 生成密钥 → 上传 CSR → 注册设备 → 创建 Profile → 签名 → 安装。
+"""登录、token 交换、签名材料申请、HAP 签名和安装的全流程编排。
 
 双重缓存策略（同一天内复用，避免反复登录和申请）：
   1. Token 缓存：``signing_files/.token_cache.json`` 存储当天登录的 token 信息，
      同账号同一天内复用，不重新登录。
-  2. 签名文件缓存：``signing_files/{bundle_name}/metadata.json`` 存储当天申请的签名文件路径，
-     同一天内复用，不重新申请证书/设备/Profile。
+  2. 签名文件缓存：``signing_files/{bundle_name}/metadata.json`` 存储当天申请的
+     签名文件路径，同一天内复用，不重新申请证书/设备/Profile。
 
 缓存失效场景：
   - 跨天：token 和签名文件缓存都失效，重新登录 + 重新申请。
@@ -18,18 +18,23 @@ import os
 import zipfile
 from datetime import date
 
-from hapsign.config import DEVICE_TYPE_PHONE, KEY_ALIAS, ACL_PERMISSION_WHITELIST
-from hapsign.models import TokenInfo, CertResult, AppBriefInfo, ProvisionResult
-from hapsign.login.browser_login import BrowserLogin
-from hapsign.token.token_exchange import TokenExchange
-from hapsign.api.client import HuaweiSignClient, TokenExpiredError
+from hapsign.api.capability_api import CapabilityAPI
 from hapsign.api.cert_api import CertAPI
+from hapsign.api.client import HuaweiSignClient, TokenExpiredError
 from hapsign.api.device_api import DeviceAPI
 from hapsign.api.provision_api import ProvisionAPI
-from hapsign.api.capability_api import CapabilityAPI
-from hapsign.signing.keytool_util import KeytoolUtil
+from hapsign.config import (
+    ACL_PERMISSION_WHITELIST,
+    DEVICE_TYPE_PHONE,
+    KEY_ALIAS,
+    KEYSTORE_PASSWORD,
+)
+from hapsign.login.browser_login import BrowserLogin
+from hapsign.models import AppBriefInfo, CertResult, ProvisionResult, TokenInfo
 from hapsign.signing.hap_signer import HapSigner
 from hapsign.signing.installer import Installer
+from hapsign.signing.keytool_util import KeytoolUtil
+from hapsign.token.token_exchange import TokenExchange
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +77,7 @@ class SignPipeline:
         else:
             self.work_dir = os.path.join(SIGNING_FILES_DIR, bundle_name)
         os.makedirs(self.work_dir, exist_ok=True)
-        self.keystore_password = "123456"
+        self.keystore_password = KEYSTORE_PASSWORD
         self._metadata_path = os.path.join(self.work_dir, "metadata.json")
         self._token_cache_path = os.path.join(SIGNING_FILES_DIR, ".token_cache.json")
 
@@ -95,7 +100,7 @@ class SignPipeline:
         if not os.path.exists(self._token_cache_path):
             return None
         try:
-            with open(self._token_cache_path, "r", encoding="utf-8") as f:
+            with open(self._token_cache_path, encoding="utf-8") as f:
                 cache = json.load(f)
         except (json.JSONDecodeError, OSError):
             return None
@@ -124,6 +129,10 @@ class SignPipeline:
         os.makedirs(SIGNING_FILES_DIR, exist_ok=True)
         with open(self._token_cache_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2, ensure_ascii=False)
+        try:
+            os.chmod(self._token_cache_path, 0o600)
+        except OSError as exc:
+            logger.debug("无法限制 token 缓存文件权限: %s", exc)
         logger.info("[cache] token 缓存已保存: %s", self._token_cache_path)
 
     def _init_client_from_cache(self, cache: dict) -> None:
@@ -146,10 +155,7 @@ class SignPipeline:
         self._provision_api = ProvisionAPI(self._client)
         self._capability_api = CapabilityAPI(self._client)
         self._token_from_cache = True
-        logger.info(
-            "[cache] 使用缓存 token，用户: %s (ID: %s)",
-            self._token_info.user_name, self._token_info.user_id,
-        )
+        logger.info("[cache] 使用缓存 token")
 
     def _clear_token_cache(self) -> None:
         """清除 token 缓存文件。"""
@@ -164,7 +170,7 @@ class SignPipeline:
         if not os.path.exists(self._metadata_path):
             return None
         try:
-            with open(self._metadata_path, "r", encoding="utf-8") as f:
+            with open(self._metadata_path, encoding="utf-8") as f:
                 meta = json.load(f)
         except (json.JSONDecodeError, OSError):
             return None
@@ -200,7 +206,6 @@ class SignPipeline:
             "cert_object_id": cert_object_id,
             "udid": udid,
             "key_alias": KEY_ALIAS,
-            "keystore_password": self.keystore_password,
         }
         with open(self._metadata_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
@@ -278,7 +283,8 @@ class SignPipeline:
                 # 只有 token 真正失效才回退到重新登录
                 logger.warning(
                     "x %s failed: token 已失效 (%s)，回退到重新登录",
-                    name, e,
+                    name,
+                    e,
                 )
                 self._token_from_cache = False
                 self._clear_token_cache()
@@ -309,7 +315,7 @@ class SignPipeline:
         )
         token_info = self._token_exchange.get_access_token(jwt_token)
         self._token_info = token_info
-        logger.info("用户: %s (ID: %s)", token_info.user_name, token_info.user_id)
+        logger.info("登录成功")
 
         self._client = HuaweiSignClient(
             access_token=token_info.access_token,
@@ -357,7 +363,8 @@ class SignPipeline:
 
         logger.info(
             "App ID: %s, Project ID: %s",
-            self._app_info.app_id, self._app_info.project_id,
+            self._app_info.app_id,
+            self._app_info.project_id,
         )
 
     def _step_generate_keypair(self) -> None:
@@ -400,14 +407,10 @@ class SignPipeline:
 
         # 删除同名旧证书（与 DevEco deleteRemoteSignData 一致）
         try:
-            old_cert = self._with_refresh(
-                self._cert_api.find_cert, team_id, cert_name
-            )
+            old_cert = self._with_refresh(self._cert_api.find_cert, team_id, cert_name)
             old_id = str(old_cert.get("id", ""))
             if old_id:
-                self._with_refresh(
-                    self._cert_api.delete_certificate, team_id, old_id
-                )
+                self._with_refresh(self._cert_api.delete_certificate, team_id, old_id)
                 logger.info("Deleted old certificate (id=%s)", old_id)
         except ValueError:
             logger.debug("No existing certificate to delete")
@@ -418,18 +421,17 @@ class SignPipeline:
         req_source = "IDE" if self.enable_capability else None
         self._with_refresh(
             self._cert_api.add_certificate,
-            self._csr_content, team_id, cert_name, req_source,
+            self._csr_content,
+            team_id,
+            cert_name,
+            req_source,
         )
 
         # 查询 certObjectId 和 cert id
-        cert_info = self._with_refresh(
-            self._cert_api.find_cert, team_id, cert_name
-        )
+        cert_info = self._with_refresh(self._cert_api.find_cert, team_id, cert_name)
         cert_object_id = str(cert_info.get("certObjectId", ""))
         cert_id = str(cert_info.get("id", ""))
-        self._cert_result = CertResult(
-            cert_object_id=cert_object_id, cert_id=cert_id
-        )
+        self._cert_result = CertResult(cert_object_id=cert_object_id, cert_id=cert_id)
         logger.info("Cert ID: %s, ObjectId: %s", cert_id, cert_object_id)
 
         self._cer_path = os.path.join(
@@ -447,7 +449,7 @@ class SignPipeline:
         assert self._device_api is not None
         installer = Installer()
         self._udid = installer.get_udid()
-        logger.info("设备 UDID: %s", self._udid)
+        logger.info("已读取设备 UDID")
 
         self._with_refresh(
             self._device_api.add_device,
@@ -577,12 +579,10 @@ class SignPipeline:
                         perms = data.get("module", {}).get("requestPermissions", [])
                         all_names = [p["name"] for p in perms if "name" in p]
                         filtered = [
-                            n for n in all_names
-                            if n in ACL_PERMISSION_WHITELIST
+                            n for n in all_names if n in ACL_PERMISSION_WHITELIST
                         ]
                         skipped = [
-                            n for n in all_names
-                            if n not in ACL_PERMISSION_WHITELIST
+                            n for n in all_names if n not in ACL_PERMISSION_WHITELIST
                         ]
                         if skipped:
                             logger.info(

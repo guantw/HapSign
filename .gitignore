@@ -5,6 +5,12 @@ __pycache__/
 dist/
 build/
 *.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # 签名产物（证书、密钥、Profile、签名后的 hap）
 signing_files/
@@ -23,3 +29,4 @@ reverse/
 Thumbs.db
 Desktop.ini
 .DS_Store
+.bitfun/

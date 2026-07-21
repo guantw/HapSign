@@ -8,9 +8,9 @@
 - get_cert_list: 查询证书列表
 """
 
-from typing import Any, Dict, List, Optional
-
 import logging
+from typing import Any
+
 import requests
 
 from hapsign.api.client import HuaweiSignClient
@@ -76,8 +76,8 @@ class CertAPI:
         self,
         csr_content: str,
         team_id: str,
-        cert_name: Optional[str] = None,
-        req_source: Optional[str] = None,
+        cert_name: str | None = None,
+        req_source: str | None = None,
     ) -> bool:
         """上传 CSR 申请调试证书。
 
@@ -109,7 +109,7 @@ class CertAPI:
             cert_name = f"auto_debug_{team_id}.cer"
 
         headers = self._client._get_headers(team_id)
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "csr": csr_content,
             "certName": cert_name,
             "certType": "1",
@@ -124,7 +124,7 @@ class CertAPI:
             raise RuntimeError(f"add_certificate failed: {text}")
         return True
 
-    def get_cert_list(self, team_id: str) -> List[Dict[str, Any]]:
+    def get_cert_list(self, team_id: str) -> list[dict[str, Any]]:
         """查询证书列表。
 
         GET {API_CERT_LIST}（注意是 GET，不是 POST）。
@@ -139,9 +139,7 @@ class CertAPI:
         data = self._client._do_get(API_CERT_LIST, headers)
         return data.get("certList") or []
 
-    def find_cert(
-        self, team_id: str, cert_name: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def find_cert(self, team_id: str, cert_name: str | None = None) -> dict[str, Any]:
         """从证书列表中按名称查找证书信息。
 
         Args:

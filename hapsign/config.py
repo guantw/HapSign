@@ -49,6 +49,8 @@ KEY_VALIDITY_DAYS = 9125  # 25 年
 KEY_ALIAS = "debugKey"
 KEY_DNAME = "CN=DebugKey,OU=,O=,L=,ST=,C="
 SIGN_ALG = "SHA256withECDSA"
+# 仅用于本机调试密钥库。正式环境应通过环境变量覆盖。
+KEYSTORE_PASSWORD = os.environ.get("HAPSIGN_KEYSTORE_PASSWORD", "123456")
 
 # ── hap 签名 ──────────────────────────────────────────────────
 HAP_SIGN_ALG = "SHA256withECDSA"
@@ -79,11 +81,20 @@ _DEVECO_HOME = os.environ.get(
 DEVECO_JBR = os.path.join(_DEVECO_HOME, "jbr", "bin", "java.exe")
 HAP_SIGN_TOOL = os.path.join(
     _DEVECO_HOME,
-    "sdk", "default", "openharmony", "toolchains", "lib", "hap-sign-tool.jar",
+    "sdk",
+    "default",
+    "openharmony",
+    "toolchains",
+    "lib",
+    "hap-sign-tool.jar",
 )
 HDC_PATH = os.path.join(
     _DEVECO_HOME,
-    "sdk", "default", "openharmony", "toolchains", "hdc.exe",
+    "sdk",
+    "default",
+    "openharmony",
+    "toolchains",
+    "hdc.exe",
 )
 
 # ── HTTP header 常量 ──────────────────────────────────────────
@@ -99,27 +110,29 @@ HEADER_ACCEPT_LANG = "zh-CN"
 # ── ACL 权限白名单（从 DevEco 6.1 生成的 p7b allowed-acls 提取）────
 # 仅这些权限可通过 aclPermissionList 预授权，其余权限会被服务端拒绝
 # （"exist permission not in support scope"）
-ACL_PERMISSION_WHITELIST = frozenset({
-    "ohos.permission.READ_WRITE_DESKTOP_DIRECTORY",
-    "ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY",
-    "ohos.permission.READ_WRITE_DOCUMENTS_DIRECTORY",
-    "ohos.permission.CUSTOM_SANDBOX",
-    "ohos.permission.READ_PASTEBOARD",
-    "ohos.permission.READ_WRITE_USER_FILE",
-    "ohos.permission.ALLOW_EXTERNAL_NATIVE_CODE",
-    "ohos.permission.READ_WRITE_DOWNLOAD_DIRECTORY",
-    # 以下权限从 5.x 白名单保留，兼容旧 SDK
-    "ohos.permission.READ_CONTACTS",
-    "ohos.permission.WRITE_CONTACTS",
-    "ohos.permission.READ_AUDIO",
-    "ohos.permission.WRITE_AUDIO",
-    "ohos.permission.READ_IMAGEVIDEO",
-    "ohos.permission.WRITE_IMAGEVIDEO",
-    "ohos.permission.ACCESS_DDK_USB",
-    "ohos.permission.ACCESS_DDK_HID",
-    "ohos.permission.SYSTEM_FLOAT_WINDOW",
-    "ohos.permission.FILE_ACCESS_PERSIST",
-    "ohos.permission.INPUT_MONITORING",
-    "ohos.permission.INTERCEPT_INPUT_EVENT",
-    "ohos.permission.SHORT_TERM_WRITE_IMAGEVIDEO",
-})
+ACL_PERMISSION_WHITELIST = frozenset(
+    {
+        "ohos.permission.READ_WRITE_DESKTOP_DIRECTORY",
+        "ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY",
+        "ohos.permission.READ_WRITE_DOCUMENTS_DIRECTORY",
+        "ohos.permission.CUSTOM_SANDBOX",
+        "ohos.permission.READ_PASTEBOARD",
+        "ohos.permission.READ_WRITE_USER_FILE",
+        "ohos.permission.ALLOW_EXTERNAL_NATIVE_CODE",
+        "ohos.permission.READ_WRITE_DOWNLOAD_DIRECTORY",
+        # 以下权限从 5.x 白名单保留，兼容旧 SDK
+        "ohos.permission.READ_CONTACTS",
+        "ohos.permission.WRITE_CONTACTS",
+        "ohos.permission.READ_AUDIO",
+        "ohos.permission.WRITE_AUDIO",
+        "ohos.permission.READ_IMAGEVIDEO",
+        "ohos.permission.WRITE_IMAGEVIDEO",
+        "ohos.permission.ACCESS_DDK_USB",
+        "ohos.permission.ACCESS_DDK_HID",
+        "ohos.permission.SYSTEM_FLOAT_WINDOW",
+        "ohos.permission.FILE_ACCESS_PERSIST",
+        "ohos.permission.INPUT_MONITORING",
+        "ohos.permission.INTERCEPT_INPUT_EVENT",
+        "ohos.permission.SHORT_TERM_WRITE_IMAGEVIDEO",
+    }
+)

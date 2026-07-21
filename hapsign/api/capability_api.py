@@ -8,7 +8,6 @@ subscribe 步骤在无 capabilities 时为 no-op，命令行工具中跳过。
 """
 
 import logging
-from typing import Optional
 
 from hapsign.api.client import HuaweiSignClient
 from hapsign.config import API_APP_BRIEF_INFO
@@ -28,9 +27,7 @@ class CapabilityAPI:
         """
         self._client = client
 
-    def get_app_brief_info(
-        self, team_id: str, bundle_name: str
-    ) -> Optional[AppBriefInfo]:
+    def get_app_brief_info(self, team_id: str, bundle_name: str) -> AppBriefInfo | None:
         """查询应用简要信息，获取 appId 和 projectId。
 
         GET {API_APP_BRIEF_INFO}

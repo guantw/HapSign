@@ -5,7 +5,7 @@
 - get_device_list: 查询已注册设备列表
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from hapsign.api.client import HuaweiSignClient
 from hapsign.config import API_DEVICE_ADD, API_DEVICE_LIST, ERR_DEVICE_DUPLICATE
@@ -27,7 +27,7 @@ class DeviceAPI:
         udid: str,
         device_type: str,
         team_id: str,
-        device_name: Optional[str] = None,
+        device_name: str | None = None,
     ) -> bool:
         """注册调试设备。
 
@@ -40,7 +40,7 @@ class DeviceAPI:
             udid: 设备 UDID（64 位十六进制字符串）。
             device_type: 设备类型码（如 "4" 表示手机，参见 config.DEVICE_TYPE_*）。
             team_id: 团队 ID。
-            device_name: 设备显示名，默认自动生成 "auto_sign_device_No.{随机数}{时间戳}"。
+            device_name: 设备显示名，默认使用随机数和时间戳自动生成。
 
         Returns:
             注册成功（含设备已存在）返回 True。
@@ -48,13 +48,14 @@ class DeviceAPI:
         if device_name is None:
             import random
             import time
+
             device_name = (
                 f"auto_sign_device_No."
                 f"{random.randint(0, 2999)}{int(time.time() * 1000)}"
             )
 
         headers = self._client._get_headers(team_id)
-        params: Dict[str, str] = {
+        params: dict[str, str] = {
             "deviceName": device_name,
             "udid": udid,
             "deviceType": device_type,
@@ -69,7 +70,7 @@ class DeviceAPI:
 
         return True
 
-    def get_device_list(self, team_id: str) -> List[Dict[str, Any]]:
+    def get_device_list(self, team_id: str) -> list[dict[str, Any]]:
         """查询已注册的设备列表。
 
         GET {API_DEVICE_LIST}（注意是 GET，不是 POST）。

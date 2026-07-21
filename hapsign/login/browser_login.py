@@ -16,7 +16,7 @@ import logging
 import socket
 import threading
 import uuid
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from hapsign.config import APP_ID, BASE_URL, LOGIN_AUTH_PATH
@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # 回调超时（秒）—— 给用户足够时间处理验证码/二次验证
 _CALLBACK_TIMEOUT = 300
+_CALLBACK_HOST = "127.0.0.1"
+_MAX_CALLBACK_BODY_SIZE = 64 * 1024
 
 # 登录成功重定向路径
 _LOGIN_SUCCESS_PATH = "console/DevEcoIDE/loginSuccess"
@@ -33,7 +35,7 @@ _LOGIN_SUCCESS_PATH = "console/DevEcoIDE/loginSuccess"
 def _find_free_port() -> int:
     """找本机空闲 TCP 端口。"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("0.0.0.0", 0))
+        s.bind((_CALLBACK_HOST, 0))
         return s.getsockname()[1]
 
 
@@ -47,17 +49,14 @@ def _make_callback_handler(
     """
 
     class _CallbackHandler(BaseHTTPRequestHandler):
-
         def _process_params(self, params: dict) -> None:
             """处理回调参数，校验 CSRF code 并保存 tempToken。"""
-            logger.info("[callback] params received: %s", params)
+            # 回调中含有 tempToken。日志只记录字段名，避免用户分享日志时泄漏凭据。
+            logger.debug("[callback] fields received: %s", sorted(params))
 
             received_code = params.get("code", "")
             if received_code != expected_code:
-                logger.warning(
-                    "[callback] CSRF code mismatch! expected=%s received=%s",
-                    expected_code, received_code,
-                )
+                logger.warning("[callback] CSRF code mismatch")
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"invalid csrf code")
@@ -75,15 +74,19 @@ def _make_callback_handler(
 
         def do_POST(self):
             content_length = int(self.headers.get("Content-Length", 0))
+            if content_length > _MAX_CALLBACK_BODY_SIZE:
+                self.send_response(413)
+                self.end_headers()
+                return
             body = self.rfile.read(content_length).decode("utf-8")
-            logger.info("[callback] POST %s body=%s", self.path, body[:200])
+            logger.debug("[callback] POST path=%s", self.path)
             params = parse_qs(body)
             params = {k: v[0] if isinstance(v, list) else v for k, v in params.items()}
             self._process_params(params)
 
         def do_GET(self):
             parsed = urlparse(self.path)
-            logger.info("[callback] GET path=%s query=%s", parsed.path, parsed.query[:200])
+            logger.debug("[callback] GET path=%s", parsed.path)
             if parsed.path != "/callback":
                 self.send_response(200)
                 self.end_headers()
@@ -128,23 +131,21 @@ class BrowserLogin:
 
         # ── 3. 构建登录 URL ──
         login_url = (
-            f"{BASE_URL}/{LOGIN_AUTH_PATH}"
-            f"?port={port}&appid={APP_ID}&code={csrf_code}"
+            f"{BASE_URL}/{LOGIN_AUTH_PATH}?port={port}&appid={APP_ID}&code={csrf_code}"
         )
 
-        logger.info("[LOGIN] port=%d csrf_code=%s", port, csrf_code)
-        logger.info("[LOGIN] login_url=%s", login_url)
+        logger.info("[LOGIN] callback port=%d", port)
 
         # ── 4. 启动本地 HTTP 回调服务 ──
         callback_data: dict = {}
         callback_event = threading.Event()
 
         handler_class = _make_callback_handler(csrf_code, callback_data, callback_event)
-        server = ThreadingHTTPServer(("0.0.0.0", port), handler_class)
+        server = ThreadingHTTPServer((_CALLBACK_HOST, port), handler_class)
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
 
-        logger.info("[LOGIN] callback server listening on 0.0.0.0:%d", port)
+        logger.info("[LOGIN] callback server listening on %s:%d", _CALLBACK_HOST, port)
 
         try:
             # ── 5. 启动 Playwright 浏览器，等待回调 ──
@@ -179,13 +180,14 @@ class BrowserLogin:
             RuntimeError: Playwright 未安装、浏览器启动失败或回调超时
         """
         try:
-            from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
-        except ImportError:
+            from playwright.sync_api import TimeoutError as PwTimeout
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
             raise RuntimeError(
                 "Playwright not installed. Run:\n"
                 "  pip install playwright\n"
                 "  playwright install chromium"
-            )
+            ) from exc
 
         try:
             with sync_playwright() as pw:
@@ -204,13 +206,13 @@ class BrowserLogin:
                 )
                 page = context.new_page()
 
-                # 导航到登录页（用 domcontentloaded 而非 networkidle，避免持续网络请求导致超时）
+                # 使用 domcontentloaded，避免持续网络请求让 networkidle 超时。
                 try:
                     page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
-                except PwTimeout:
-                    raise RuntimeError("Login page load timed out")
+                except PwTimeout as exc:
+                    raise RuntimeError("Login page load timed out") from exc
 
-                print(f"[LOGIN] Page loaded: {page.url}")
+                print("[LOGIN] Page loaded")
                 print("[LOGIN] Please login in the browser window...")
 
                 print(f"[LOGIN] Waiting for callback (timeout={_CALLBACK_TIMEOUT}s)...")
@@ -219,7 +221,8 @@ class BrowserLogin:
                 # 等待回调（浏览器保持打开，让用户手动登录）
                 if not callback_event.wait(timeout=_CALLBACK_TIMEOUT):
                     raise RuntimeError(
-                        f"Login timed out: no callback received within {_CALLBACK_TIMEOUT}s. "
+                        "Login timed out: no callback received within "
+                        f"{_CALLBACK_TIMEOUT}s. "
                         f"Please check your network and complete login in the browser."
                     )
 

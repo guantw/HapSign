@@ -9,7 +9,6 @@
 
 import base64
 import json
-from typing import Optional
 
 import requests
 
@@ -18,8 +17,8 @@ from hapsign.config import (
     BASE_URL,
     HEADER_JWT_TOKEN,
     HEADER_REFRESH,
-    TEMP_TOKEN_CHECK_PATH,
     JWT_TOKEN_CHECK_PATH,
+    TEMP_TOKEN_CHECK_PATH,
 )
 from hapsign.models import TokenInfo
 

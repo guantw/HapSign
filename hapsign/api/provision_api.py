@@ -14,7 +14,7 @@ Test Profile（APL=normal）和 Real Profile（APL=system_basic）的区别：
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from hapsign.api.client import HuaweiSignClient
 from hapsign.config import (
@@ -43,9 +43,9 @@ class ProvisionAPI:
         self,
         team_id: str,
         bundle_name: str,
-        cert_list: List[str],
-        device_list: List[str],
-        acl_permissions: Optional[List[str]] = None,
+        cert_list: list[str],
+        device_list: list[str],
+        acl_permissions: list[str] | None = None,
     ) -> ProvisionResult:
         """创建测试 Profile（APL=normal）。
 
@@ -64,7 +64,7 @@ class ProvisionAPI:
         """
         provision_name = bundle_name
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "certList": cert_list,
             "packageName": bundle_name,
             "deviceList": device_list,
@@ -72,18 +72,16 @@ class ProvisionAPI:
             "aclPermissionList": acl_permissions or [],
         }
 
-        return self._add_provision(
-            API_TEST_PROVISION_ADD, team_id, body, is_real=False
-        )
+        return self._add_provision(API_TEST_PROVISION_ADD, team_id, body, is_real=False)
 
     def add_real_provision(
         self,
         team_id: str,
         bundle_name: str,
-        cert_list: List[str],
-        device_list: List[str],
+        cert_list: list[str],
+        device_list: list[str],
         app_id: str,
-        acl_permissions: Optional[List[str]] = None,
+        acl_permissions: list[str] | None = None,
     ) -> ProvisionResult:
         """创建 Real Profile（APL=system_basic）。
 
@@ -106,7 +104,7 @@ class ProvisionAPI:
         """
         provision_name = f"auto_{bundle_name}"
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "certList": cert_list,
             "packageName": bundle_name,
             "deviceList": device_list,
@@ -117,15 +115,13 @@ class ProvisionAPI:
             "aclPermissionList": acl_permissions or [],
         }
 
-        return self._add_provision(
-            API_REAL_PROVISION_ADD, team_id, body, is_real=True
-        )
+        return self._add_provision(API_REAL_PROVISION_ADD, team_id, body, is_real=True)
 
     def _add_provision(
         self,
         url: str,
         team_id: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         is_real: bool,
     ) -> ProvisionResult:
         """执行 provision/add 请求并解析响应。
@@ -188,7 +184,7 @@ class ProvisionAPI:
         self,
         team_id: str,
         app_id: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """查询已创建的 Profile 列表。
 
         GET {API_PROVISION_LIST}

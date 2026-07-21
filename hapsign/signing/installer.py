@@ -12,7 +12,7 @@ class Installer:
     def get_udid(self) -> str:
         """获取已连接设备的 UDID。
 
-        使用 ``hdc shell bm get -u`` 命令（逆向自 AutoSigningConfigsService.getDeviceUdid）。
+        使用 ``hdc shell bm get -u`` 命令获取设备标识。
         输出形如::
 
             udid of current device is :
@@ -41,9 +41,7 @@ class Installer:
                 match = re.search(r"\b([0-9A-Fa-f]{64})\b", result.stdout)
                 if match:
                     return match.group(1)
-        raise RuntimeError(
-            "无法获取设备 UDID: 请确认已连接设备且 hdc 可用"
-        )
+        raise RuntimeError("无法获取设备 UDID: 请确认已连接设备且 hdc 可用")
 
     def install(self, hap_path: str) -> bool:
         """使用 hdc install 安装 hap 包到已连接设备。
@@ -62,7 +60,8 @@ class Installer:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         output = (result.stdout or "") + (result.stderr or "")
         # hdc install 即使失败也可能返回 0，需要检查输出内容
-        if result.returncode != 0 or "error:" in output.lower() or "failed" in output.lower():
+        failed = "error:" in output.lower() or "failed" in output.lower()
+        if result.returncode != 0 or failed:
             raise RuntimeError(
                 f"hdc install 失败 (code={result.returncode}): {output.strip()}"
             )

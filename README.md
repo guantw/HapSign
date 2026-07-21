@@ -2,6 +2,10 @@
 
 通过华为账号自动生成 HarmonyOS 调试签名，对未签名的 hap 包签名并安装到设备。
 
+> [!IMPORTANT]
+> 本项目是非官方工具，与华为无隶属或背书关系。它依赖可能变化的在线接口，仅用于合法的
+> 本机开发和调试。使用者应自行确认账号权限、数据安全以及相关服务条款。
+
 ## 工作原理
 
 ```
@@ -23,11 +27,11 @@ Playwright 打开华为登录页（用户手动登录）
 
 ```bash
 # 克隆仓库
-git clone https://github.com/GCWing/hapsign.git
-cd hapsign
+git clone https://github.com/guantw/HapSign.git
+cd HapSign
 
-# 安装 Python 依赖
-pip install -r requirements.txt
+# 安装项目（提供 hapsign 命令）
+python -m pip install .
 
 # 安装 Playwright 浏览器（首次必须）
 playwright install chromium
@@ -43,6 +47,12 @@ set DEVECO_HOME=E:\DevEco Studio
 
 :: PowerShell
 $env:DEVECO_HOME = "E:\DevEco Studio"
+```
+
+调试密钥库默认使用兼容 DevEco 调试流程的固定密码。如需覆盖，请设置：
+
+```powershell
+$env:HAPSIGN_KEYSTORE_PASSWORD = "使用你自己的强密码"
 ```
 
 ### 配置 Python 路径（bat 脚本用）
@@ -66,15 +76,16 @@ $env:HAPSIGN_PYTHON = "C:\path\to\your\python.exe"
 ### 方式二：命令行
 
 ```bash
-python main.py --hap path\to\app-unsigned.hap
+hapsign --hap path\to\app-unsigned.hap
 ```
 
 包名会自动从 hap 内的 `module.json` 提取，无需手动指定。
+源码目录中仍可使用 `python main.py --hap ...`。
 
 ### 完整参数
 
 ```
-python main.py --hap <hap路径> [选项]
+hapsign --hap <hap路径> [选项]
 
 选项:
   --hap               未签名的 hap 文件路径（必填）
@@ -107,7 +118,7 @@ python main.py --hap <hap路径> [选项]
 如果应用需要 `system_basic` 级别的 APL，加 `--enable-capability` 参数走 Real Provision 路径：
 
 ```bash
-python main.py --hap app.hap --enable-capability
+hapsign --hap app.hap --enable-capability
 ```
 
 此模式通过 `add.real.provision` API 创建 Real Profile（provisionType=1），对应 DevEco Studio 6.1+ 的 `enableCapability` 路径。需要应用已在 AGC（AppGallery Connect）注册且当前账号有访问权限，否则自动回退到 Test Profile。
@@ -135,16 +146,32 @@ signing_files/com.example.myapp/
 - 跨天自动失效，重新走完整流程
 - Token 失效时自动刷新，刷新失败才回退到重新登录
 
+这些文件包含明文敏感信息，不要上传、分享或放入云同步目录。共享电脑使用完毕后应删除
+`signing_files/`。详细说明见 [SECURITY.md](SECURITY.md)。
+
 ## 限制
 
 - 登录验证码 / 二次验证需要用户在浏览器中手动处理
 - 仅支持 Windows（SDK 路径、bat 脚本均为 Windows 环境）
 - 签名流程依赖华为云 API，需要有网络连接和华为开发者账号
 
+## 开发与贡献
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m ruff format .
+python -m ruff check .
+python -m pytest --cov
+```
+
+测试不需要真实账号、网络、DevEco Studio 或 HarmonyOS 设备。贡献流程见
+[CONTRIBUTING.md](CONTRIBUTING.md)，安全问题请按 [SECURITY.md](SECURITY.md) 报告。
+
 ## 项目结构
 
 ```
 hapsign/
+├── cli.py                # 命令行参数和入口
 ├── config.py             # 配置常量（域名、SDK 路径、API 端点、密钥参数）
 ├── models.py             # 数据模型
 ├── pipeline.py           # 全流程编排（缓存、登录、签名、安装）
@@ -166,6 +193,6 @@ hapsign/
 
 ## License
 
-MIT
+本项目使用 [MIT License](LICENSE)。参与项目需遵守 [Code of Conduct](CODE_OF_CONDUCT.md)。
 
 Powered by [BitFun](https://github.com/GCWing/BitFun)
