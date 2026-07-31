@@ -2,6 +2,7 @@
 所有逆向获得的真实值集中在此，便于维护。"""
 
 import os
+import sys
 
 # ── 域名 ──────────────────────────────────────────────────────
 # 登录/认证域名（从 IdeSystem.properties 逆向获得）
@@ -73,29 +74,53 @@ ERR_PROVISION_EXCEED_LIMIT_2 = 205389845
 ERR_APP_ID_INVALID = 205389959
 ERR_TOKEN_INVALID_CODE = 4000  # 响应 code=4000 表示 token 失效
 
+
 # ── 本机 SDK 路径（可通过环境变量覆盖）──────────────────────
-_DEVECO_HOME = os.environ.get(
-    "DEVECO_HOME",
-    r"D:\Program Files\Huawei\DevEco Studio",
-)
-DEVECO_JBR = os.path.join(_DEVECO_HOME, "jbr", "bin", "java.exe")
-HAP_SIGN_TOOL = os.path.join(
-    _DEVECO_HOME,
-    "sdk",
-    "default",
-    "openharmony",
-    "toolchains",
-    "lib",
-    "hap-sign-tool.jar",
-)
-HDC_PATH = os.path.join(
-    _DEVECO_HOME,
-    "sdk",
-    "default",
-    "openharmony",
-    "toolchains",
-    "hdc.exe",
-)
+def default_deveco_home(platform: str | None = None) -> str:
+    """返回当前平台的 DevEco Studio 默认安装根目录。"""
+    plat = sys.platform if platform is None else platform
+    if plat == "darwin":
+        return "/Applications/DevEco-Studio.app/Contents"
+    if plat == "win32":
+        return r"D:\Program Files\Huawei\DevEco Studio"
+    return "/opt/DevEco-Studio"
+
+
+def resolve_sdk_paths(
+    deveco_home: str | None = None,
+    platform: str | None = None,
+) -> tuple[str, str, str, str]:
+    """解析 java / hap-sign-tool / hdc / keytool 路径。
+
+    Returns:
+        (java, hap_sign_tool, hdc, keytool)
+    """
+    plat = sys.platform if platform is None else platform
+    home = deveco_home if deveco_home is not None else default_deveco_home(plat)
+    toolchains = os.path.join(home, "sdk", "default", "openharmony", "toolchains")
+    hap_sign_tool = os.path.join(toolchains, "lib", "hap-sign-tool.jar")
+
+    if plat == "darwin":
+        bin_dir = os.path.join(home, "jbr", "Contents", "Home", "bin")
+        java = os.path.join(bin_dir, "java")
+        keytool = os.path.join(bin_dir, "keytool")
+        hdc = os.path.join(toolchains, "hdc")
+    elif plat == "win32":
+        bin_dir = os.path.join(home, "jbr", "bin")
+        java = os.path.join(bin_dir, "java.exe")
+        keytool = os.path.join(bin_dir, "keytool.exe")
+        hdc = os.path.join(toolchains, "hdc.exe")
+    else:
+        bin_dir = os.path.join(home, "jbr", "bin")
+        java = os.path.join(bin_dir, "java")
+        keytool = os.path.join(bin_dir, "keytool")
+        hdc = os.path.join(toolchains, "hdc")
+
+    return java, hap_sign_tool, hdc, keytool
+
+
+_DEVECO_HOME = os.environ.get("DEVECO_HOME") or default_deveco_home()
+DEVECO_JBR, HAP_SIGN_TOOL, HDC_PATH, KEYTOOL_PATH = resolve_sdk_paths(_DEVECO_HOME)
 
 # ── HTTP header 常量 ──────────────────────────────────────────
 HEADER_OAUTH2_TOKEN = "oauth2Token"

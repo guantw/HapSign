@@ -5,21 +5,21 @@ Profile、设备 UDID 或签名后的 HAP 加入仓库。
 
 ## 开发环境
 
-项目要求 Windows 和 Python 3.11 或更高版本。创建并激活虚拟环境后安装开发依赖：
+项目要求 Windows 或 macOS，以及 Python 3.11 或更高版本。创建并激活虚拟环境后安装开发依赖：
 
-```powershell
+```bash
 python -m pip install -r requirements-dev.txt
 ```
 
 需要手动验证完整登录流程时，再安装 Playwright 浏览器：
 
-```powershell
+```bash
 playwright install chromium
 ```
 
 ## 提交前检查
 
-```powershell
+```bash
 python -m ruff format .
 python -m ruff check .
 python -m pytest --cov

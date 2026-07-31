@@ -11,9 +11,8 @@ class KeytoolUtil:
 
     @staticmethod
     def _get_keytool_path() -> str:
-        """从 DEVECO_JBR 路径推导 keytool.exe 路径。"""
-        jbr_dir = os.path.dirname(config.DEVECO_JBR)
-        return os.path.join(jbr_dir, "keytool.exe")
+        """返回与当前平台匹配的 keytool 路径。"""
+        return config.KEYTOOL_PATH
 
     def generate_keypair(
         self,

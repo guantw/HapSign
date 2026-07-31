@@ -6,6 +6,7 @@
 
 ### Added
 
+- macOS 支持：按平台解析 DevEco JBR / hap-sign-tool / hdc 路径，可用 `hapsign` 命令行签名安装。
 - 可安装的 `hapsign` 命令和标准 Python 项目元数据。
 - Ruff、pytest、覆盖率、pre-commit 和 Windows CI 配置。
 - 贡献指南、安全策略、行为准则和统一编辑器配置。

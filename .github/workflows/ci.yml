@@ -10,11 +10,13 @@ permissions:
 
 jobs:
   test:
-    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13"]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
