@@ -18,10 +18,12 @@ Playwright 打开华为登录页（用户手动登录）
 
 ## 前置条件
 
-1. **DevEco Studio** 已安装（需要其中的 JBR Java、hap-sign-tool.jar、hdc.exe）
+1. **DevEco Studio** 已安装（需要其中的 JBR Java、hap-sign-tool.jar、hdc）
 2. **Python 3.11+**（推荐使用 conda 或 venv 隔离环境）
 3. **HarmonyOS 设备**已通过 USB 连接并开启 USB 调试模式
 4. **华为开发者账号**（需要已完成实名认证）
+
+支持 **Windows** 与 **macOS**（命令行）。
 
 ## 安装
 
@@ -39,23 +41,31 @@ playwright install chromium
 
 ### 配置 DevEco Studio 路径
 
-默认查找路径为 `D:\Program Files\Huawei\DevEco Studio`。如果你的 DevEco Studio 安装在其他位置，设置环境变量：
+默认查找路径：
 
-```bat
-:: Windows CMD
+- Windows: `D:\Program Files\Huawei\DevEco Studio`
+- macOS: `/Applications/DevEco-Studio.app/Contents`
+
+若安装在其他位置，设置环境变量：
+
+```bash
+# macOS / Linux shell
+export DEVECO_HOME="/Applications/DevEco-Studio.app/Contents"
+
+# Windows CMD
 set DEVECO_HOME=E:\DevEco Studio
 
-:: PowerShell
+# Windows PowerShell
 $env:DEVECO_HOME = "E:\DevEco Studio"
 ```
 
 调试密钥库默认使用兼容 DevEco 调试流程的固定密码。如需覆盖，请设置：
 
-```powershell
-$env:HAPSIGN_KEYSTORE_PASSWORD = "使用你自己的强密码"
+```bash
+export HAPSIGN_KEYSTORE_PASSWORD="使用你自己的强密码"
 ```
 
-### 配置 Python 路径（bat 脚本用）
+### 配置 Python 路径（Windows bat 脚本用）
 
 `sign_install.bat` 默认使用系统 PATH 中的 `python`。如果使用 conda/venv，设置环境变量：
 
@@ -69,18 +79,18 @@ $env:HAPSIGN_PYTHON = "C:\path\to\your\python.exe"
 
 ## 使用
 
-### 方式一：拖拽（推荐）
-
-将 `.hap` 文件直接拖到 `sign_install.bat` 上，自动完成签名+安装。
-
-### 方式二：命令行
+### 方式一：命令行（Windows / macOS）
 
 ```bash
-hapsign --hap path\to\app-unsigned.hap
+hapsign --hap path/to/app-unsigned.hap
 ```
 
 包名会自动从 hap 内的 `module.json` 提取，无需手动指定。
 源码目录中仍可使用 `python main.py --hap ...`。
+
+### 方式二：拖拽（仅 Windows）
+
+将 `.hap` 文件直接拖到 `sign_install.bat` 上，自动完成签名+安装。
 
 ### 完整参数
 
@@ -152,7 +162,7 @@ signing_files/com.example.myapp/
 ## 限制
 
 - 登录验证码 / 二次验证需要用户在浏览器中手动处理
-- 仅支持 Windows（SDK 路径、bat 脚本均为 Windows 环境）
+- 拖拽安装脚本仅支持 Windows（`sign_install.bat`）；macOS 请使用 `hapsign` 命令行
 - 签名流程依赖华为云 API，需要有网络连接和华为开发者账号
 
 ## 开发与贡献
