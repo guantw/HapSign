@@ -11,9 +11,64 @@
 - Ruff、pytest、覆盖率、pre-commit 和 Windows CI 配置。
 - 贡献指南、安全策略、行为准则和统一编辑器配置。
 - CLI、缓存、HTTP 响应和权限提取的单元测试。
+- 自动检测已签名 HAP：存在 Hap Signing Block 时跳过登录/申请/签名，直接安装。
+- 签名块检测对齐 `developtools_hapsigner`（两阶段 EOCD、ZIP64 Locator、blockCount/尺寸边界）。
+- PySide6 桌面界面，支持文件选择、HAP 拖放、后台执行和运行记录。
+- 桌面版增加主动设备检测，并在签名安装前强制确认 HDC 设备可用。
+- 运行记录使用统一的轻量滚动条样式，文件卡片支持移除误选 HAP。
+- Windows 便携版声明 Per-Monitor V2 DPI 感知，并使用系统字体和小数缩放。
+- 桌面版签名材料改为保存在程序目录的 `signing_files/`，便于随目录迁移。
+- Windows 下 Java、keytool 和 HDC 使用无控制台窗口方式启动，消除闪窗。
+- HDC server 采用“本次启动、本次关闭”策略，避免任务结束后遗留后台进程，
+  同时不终止 DevEco 等工具已有的 HDC 服务。
+- PyInstaller 便携版构建配置，以及跨平台用户数据和工具链发现。
+- 恢复 Playwright 受控浏览器作为默认登录环境，系统默认浏览器保留为备用模式。
+- 新增 Playwright 受控系统 Edge/Chrome 模式并作为精简包默认值；兼容包仍可
+  携带内置 Chromium，普通系统默认浏览器只作为非受控备用。
+- 桌面任务使用按实际阶段推进的百分比进度条，并支持主动取消。
+- 执行中的登录、网络请求、Java/keytool、签名工具和 HDC 均响应取消信号；
+  关闭窗口时可确认中断，清理完成后自动退出。
+- 新增程序目录 JSON 配置、滚动文件日志、日志级别和敏感诊断开关。
+- 桌面设置可在程序目录、用户 AppData Local 和自定义签名目录之间切换，并可
+  一键打开签名目录或日志目录。
+- 可选择是否保留签名后的 HAP；默认在程序目录 `signed_haps/` 中仅保留最新
+  一个，新文件发布成功后才删除旧文件，关闭后使用并清理任务临时文件。
+- 便携构建采用带回退开关的保守精简：只排除已知无关的 JCEF/录像组件，并在
+  裁剪后强制执行 Chromium、Java、keytool 与 hap-sign-tool 自检。
+- 设置页改为分区卡片布局，统一重绘下拉框、弹出菜单、复选框及操作按钮。
+- Windows 字体改用整数逻辑像素、Microsoft YaHei UI 和完整 hinting，降低
+  150%/200% 高 DPI 下由分数物理像素造成的笔画发虚。
+- 补充隐私说明、第三方组件声明和开源发布门禁；便携包构建会复制项目许可、
+  冻结依赖随附许可，并为本机复制的工具链生成 SHA-256 来源清单。
+- 明确区分 MIT 源码发布与第三方二进制再分发：未确认具体 DevEco/SDK 版本许可前，
+  完整便携 ZIP 只用于本地构建验证。
+- 正式 Windows 便携构建改用 `toolchain.lock.json` 锁定并校验的 OpenHarmony
+  6.1 公共 SDK 与 Eclipse Temurin 21；构建时仅提取 HDC、hap-sign-tool、
+  libusb 和 NOTICE，并以 `jlink` 生成精简 Java 运行时，同时随包保留来源、
+  哈希、许可材料及 libusb 对应源码。DevEco 工具链只保留为显式排障回退。
+- 便携构建在 ZIP 旁自动生成标准 `.sha256` 校验文件，降低发布时手工抄录哈希出错的风险。
+
+### Fixed
+
+- HTTP 客户端正确发送 `User-Agent` / `Accept-Language` 请求头。
+- Token 缓存缺少 `jwt_token` 时不再复用，避免后续刷新失败。
+- 设备注册将业务层重复错误码视为成功，并保留 HTTP 错误信息中的兼容判定。
+- 设备注册兼容服务端新增的 `205389858 (UDID is repeat)`，复用已注册设备，
+  不再把“设备已存在”当作安装失败。
+- 签名工具默认密码统一引用 `HAPSIGN_KEYSTORE_PASSWORD` / 配置默认值。
+- 登录回调兼容根路径、`/callback` 及其他本地路径上的 GET/POST 回调，
+  并支持普通表单、multipart 表单、JSON、查询参数和 CORS 预检，修复授权后
+  一直等待的问题；用户拒绝授权时也会立即结束等待。
+- 登录回调支持 Chromium Private Network Access 预检、缺失 multipart 类型推断
+  及嵌套 JSON；运行记录会显示不含 token 的回调方法、类型和字段诊断信息。
+- 已选 HAP 卡片固定显示在拖放区右侧，避免窗口布局变化时覆盖拖放区。
+- 主动取消任务后将进度条重置为 0%。
+- 登录成功响应恢复为已验证实现使用的 DevEco 成功页跳转，并为受控 Chromium
+  预授予本地网络访问权限，避免授权完成后回调请求被浏览器策略拦截。
 
 ### Security
 
 - 登录回调服务仅监听 loopback 地址。
-- 登录日志不再包含 token、请求体、CSRF code、用户 ID、设备 UDID 或完整登录 URL。
+- 日志默认不包含 token、完整请求体、CSRF code 或完整登录 URL；只有用户主动开启
+  “敏感诊断”且使用 DEBUG 级别时才记录完整网络载荷，密钥库密码始终排除。
 - 限制登录回调请求体大小，并尽力收紧 token 缓存文件权限。

@@ -1,24 +1,28 @@
 """keytool 工具封装 —— 生成密钥对和 CSR。"""
 
 import os
-import subprocess
+import threading
 
 from hapsign import config
+from hapsign.subprocess_utils import run_process
 
 
 class KeytoolUtil:
     """封装 keytool 命令，用于生成 EC 密钥对和 CSR。"""
 
+    def __init__(self, cancel_event: threading.Event | None = None) -> None:
+        self.cancel_event = cancel_event
+
     @staticmethod
     def _get_keytool_path() -> str:
-        """返回与当前平台匹配的 keytool 路径。"""
+        """返回运行时发现的 keytool 路径。"""
         return config.KEYTOOL_PATH
 
     def generate_keypair(
         self,
         keystore_path: str,
         alias: str = config.KEY_ALIAS,
-        password: str = "123456",
+        password: str = config.KEYSTORE_PASSWORD,
     ) -> bool:
         """使用 keytool -genkeypair 生成 EC 256 密钥对。
 
@@ -58,7 +62,12 @@ class KeytoolUtil:
             "-dname",
             config.KEY_DNAME,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_process(
+            cmd,
+            capture_output=True,
+            text=True,
+            cancel_event=self.cancel_event,
+        )
         if result.returncode != 0:
             raise RuntimeError(
                 f"keytool -genkeypair 失败 (code={result.returncode}): "
@@ -70,7 +79,7 @@ class KeytoolUtil:
         self,
         keystore_path: str,
         alias: str = config.KEY_ALIAS,
-        password: str = "123456",
+        password: str = config.KEYSTORE_PASSWORD,
         csr_path: str = "",
     ) -> str:
         """使用 keytool -certreq 生成 CSR 并返回其内容。
@@ -102,7 +111,12 @@ class KeytoolUtil:
             "-sigalg",
             config.SIGN_ALG,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_process(
+            cmd,
+            capture_output=True,
+            text=True,
+            cancel_event=self.cancel_event,
+        )
         if result.returncode != 0:
             raise RuntimeError(
                 f"keytool -certreq 失败 (code={result.returncode}): "

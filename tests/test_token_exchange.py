@@ -18,12 +18,28 @@ def _jwt(payload: dict) -> str:
 
 def test_exchange_temp_token(monkeypatch) -> None:
     response = Mock(text="jwt-token")
-    monkeypatch.setattr(token_exchange.requests, "get", Mock(return_value=response))
+    get = Mock(return_value=response)
+    monkeypatch.setattr(token_exchange.requests, "get", get)
 
     result = token_exchange.TokenExchange().exchange_temp_token("temp", "CN", "1.0")
 
     assert result == "jwt-token"
     response.raise_for_status.assert_called_once()
+    assert get.call_args.kwargs["params"]["version"] == "1.0"
+
+
+def test_exchange_temp_token_default_version(monkeypatch) -> None:
+    response = Mock(text="jwt-token")
+    get = Mock(return_value=response)
+    monkeypatch.setattr(token_exchange.requests, "get", get)
+
+    token_exchange.TokenExchange().exchange_temp_token("temp")
+
+    assert (
+        get.call_args.kwargs["params"]["version"]
+        == token_exchange.LOGIN_PROTOCOL_VERSION
+    )
+    assert token_exchange.LOGIN_PROTOCOL_VERSION == "5.0.5"
 
 
 def test_get_access_token_decodes_user(monkeypatch) -> None:

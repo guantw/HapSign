@@ -4,6 +4,8 @@
 import os
 import sys
 
+from hapsign.runtime import discover_toolchain
+
 # ── 域名 ──────────────────────────────────────────────────────
 # 登录/认证域名（从 IdeSystem.properties 逆向获得）
 BASE_URL = "https://devecostudio.huawei.com"
@@ -39,6 +41,11 @@ API_AGREEMENT = "/authrouter/unrealname/agreement"
 # ── 登录参数 ──────────────────────────────────────────────────
 APP_ID = "1007"
 
+# 登录协议兼容版本：temptoken/check 请求里的 version 参数。
+# 逆向自 DevEco Studio 5.0.5 的请求，服务端可能校验该字段；在没有真实接口
+# 回归证据前不要直接改成 hapsign.__version__（升级策略见 todo P1-9）。
+LOGIN_PROTOCOL_VERSION = "5.0.5"
+
 # 国家码映射（从 HiAiLoginService 逆向获得）
 # siteId → countryCode: 1→CN, 5→SG, 7→DE, 8→RU
 SITE_ID_MAP = {"CN": "1", "SG": "5", "DE": "7", "RU": "8"}
@@ -69,13 +76,14 @@ ERR_NOT_HARMONY_USER = 205389904
 ERR_CERT_EXCEED_LIMIT = 205389872
 ERR_DEVICE_EXCEED_LIMIT = 205389859
 ERR_DEVICE_DUPLICATE = 205389857
+ERR_DEVICE_UDID_DUPLICATE = 205389858
 ERR_PROVISION_EXCEED_LIMIT = 205389938
 ERR_PROVISION_EXCEED_LIMIT_2 = 205389845
 ERR_APP_ID_INVALID = 205389959
 ERR_TOKEN_INVALID_CODE = 4000  # 响应 code=4000 表示 token 失效
 
 
-# ── 本机 SDK 路径（可通过环境变量覆盖）──────────────────────
+# ── 本机 SDK 路径兼容解析（可通过环境变量覆盖）──────────────
 def default_deveco_home(platform: str | None = None) -> str:
     """返回当前平台的 DevEco Studio 默认安装根目录。"""
     plat = sys.platform if platform is None else platform
@@ -120,7 +128,12 @@ def resolve_sdk_paths(
 
 
 _DEVECO_HOME = os.environ.get("DEVECO_HOME") or default_deveco_home()
-DEVECO_JBR, HAP_SIGN_TOOL, HDC_PATH, KEYTOOL_PATH = resolve_sdk_paths(_DEVECO_HOME)
+# ── 本机 / 便携版工具链路径（可通过环境变量覆盖）────────────
+_TOOLCHAIN = discover_toolchain()
+DEVECO_JBR = str(_TOOLCHAIN.java)
+KEYTOOL_PATH = str(_TOOLCHAIN.keytool)
+HAP_SIGN_TOOL = str(_TOOLCHAIN.hap_sign_tool)
+HDC_PATH = str(_TOOLCHAIN.hdc)
 
 # ── HTTP header 常量 ──────────────────────────────────────────
 HEADER_OAUTH2_TOKEN = "oauth2Token"
@@ -129,8 +142,11 @@ HEADER_TEAM_ID = "teamId"
 HEADER_ACCESS_TOKEN = "accessToken"
 HEADER_JWT_TOKEN = "jwtToken"
 HEADER_REFRESH = "refresh"
-HEADER_USER_AGENT = "Chrome/49.0.2623.75"
-HEADER_ACCEPT_LANG = "zh-CN"
+HEADER_USER_AGENT = "User-Agent"
+HEADER_ACCEPT_LANGUAGE = "Accept-Language"
+# DevEco 逆向请求里使用的 UA / Accept-Language 值
+USER_AGENT = "Chrome/49.0.2623.75"
+ACCEPT_LANGUAGE = "zh-CN"
 
 # ── ACL 权限白名单（从 DevEco 6.1 生成的 p7b allowed-acls 提取）────
 # 仅这些权限可通过 aclPermissionList 预授权，其余权限会被服务端拒绝

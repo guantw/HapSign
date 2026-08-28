@@ -42,7 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
   hapsign --hap app.hap --bundle-name com.example.myapp
 """,
     )
-    parser.add_argument("--hap", required=True, help="未签名的 HAP 文件路径")
+    parser.add_argument(
+        "--hap",
+        required=True,
+        help="HAP 文件路径（未签名则自动签名；已签名则直接安装）",
+    )
     parser.add_argument(
         "--bundle-name",
         default=None,

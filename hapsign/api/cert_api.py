@@ -21,7 +21,6 @@ from hapsign.config import (
     API_CERT_LIST,
     API_REAPPLY_URL,
     API_USER_TEAM,
-    BASE_URL,
     HEADER_ACCESS_TOKEN,
 )
 
@@ -60,16 +59,17 @@ class CertAPI:
     def sign_agreement(self) -> bool:
         """签署未实名用户的开发者协议。
 
-        POST {API_AGREEMENT}，header 中携带 accessToken。
-        使用登录域名（BASE_URL），不是签名 API 域名。
+        POST {API_AGREEMENT}，header 中携带 accessToken（只发这一个认证头）。
+        走统一客户端封装（_build_url 的 /authrouter/ 路由 → 登录域名 BASE_URL，
+        非签名 API 域名），从而获得取消检查、超时、脱敏诊断、HTTP 错误和
+        token 失效（HTTP 401 / code=4000 → TokenExpiredError）处理。
 
         Returns:
             签署成功返回 True。
         """
-        url = f"{BASE_URL}{API_AGREEMENT}"
         headers = {HEADER_ACCESS_TOKEN: self._client.access_token}
-        resp = requests.post(url, headers=headers, timeout=30)
-        resp.raise_for_status()
+        text = self._client._do_post_form_text(API_AGREEMENT, headers)
+        logger.debug("agreement response: %s", text[:200])
         return True
 
     def add_certificate(
@@ -219,7 +219,9 @@ class CertAPI:
             raise ValueError(f"reapply URL 中未找到 newUrl: {urls_info}")
 
         # 第二步：直接下载（不需要认证 header）
-        resp = requests.get(new_url, timeout=60)
+        self._client._check_cancelled()
+        resp = requests.get(new_url, timeout=(5, 20))
+        self._client._check_cancelled()
         resp.raise_for_status()
 
         with open(save_path, "wb") as f:

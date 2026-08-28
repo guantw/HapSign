@@ -9,35 +9,77 @@
 
 import base64
 import json
+import logging
+import threading
+from urllib.parse import urlparse
 
 import requests
 
+from hapsign.cancellation import raise_if_cancelled
 from hapsign.config import (
     APP_ID,
     BASE_URL,
     HEADER_JWT_TOKEN,
     HEADER_REFRESH,
     JWT_TOKEN_CHECK_PATH,
+    LOGIN_PROTOCOL_VERSION,
     TEMP_TOKEN_CHECK_PATH,
 )
+from hapsign.diagnostics import sensitive_logging_enabled
 from hapsign.models import TokenInfo
+
+logger = logging.getLogger(__name__)
+
+
+def _log_response(
+    operation: str,
+    url: str,
+    response: requests.Response,
+    *,
+    request_data: object,
+) -> None:
+    parsed = urlparse(url)
+    content = getattr(response, "content", b"")
+    response_size = len(content) if isinstance(content, (bytes, str)) else -1
+    logger.debug(
+        "[token] %s response=%s://%s%s status=%d bytes=%d",
+        operation,
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        response.status_code,
+        response_size,
+    )
+    if sensitive_logging_enabled():
+        logger.debug(
+            "[token] sensitive %s request=%r response=%r",
+            operation,
+            request_data,
+            response.text,
+        )
 
 
 class TokenExchange:
     """Token 交换工具类。"""
 
+    def __init__(self, cancel_event: threading.Event | None = None) -> None:
+        self.cancel_event = cancel_event
+
+    def _check_cancelled(self) -> None:
+        raise_if_cancelled(self.cancel_event)
+
     def exchange_temp_token(
         self,
         temp_token: str,
         site: str = "CN",
-        version: str = "5.0.5",
+        version: str = LOGIN_PROTOCOL_VERSION,
     ) -> str:
         """用 tempToken 换取 jwtToken。
 
         Args:
             temp_token: 浏览器回调获得的临时令牌。
             site: 站点代码（CN / SG / DE / RU）。
-            version: DevEco Studio 版本号。
+            version: 登录协议版本（默认取 config.LOGIN_PROTOCOL_VERSION）。
 
         Returns:
             jwtToken 字符串。
@@ -52,7 +94,10 @@ class TokenExchange:
             "version": version,
             "appid": APP_ID,
         }
-        resp = requests.get(url, params=params, timeout=30)
+        self._check_cancelled()
+        resp = requests.get(url, params=params, timeout=(5, 15))
+        self._check_cancelled()
+        _log_response("temp-token-check", url, resp, request_data=params)
         resp.raise_for_status()
         # 响应正文即为 jwtToken 字符串（非 JSON）
         return resp.text
@@ -72,7 +117,10 @@ class TokenExchange:
         """
         url = f"{BASE_URL}/{JWT_TOKEN_CHECK_PATH}"
         headers = {HEADER_JWT_TOKEN: jwt_token, HEADER_REFRESH: "false"}
-        resp = requests.get(url, headers=headers, timeout=30)
+        self._check_cancelled()
+        resp = requests.get(url, headers=headers, timeout=(5, 15))
+        self._check_cancelled()
+        _log_response("jwt-token-check", url, resp, request_data=headers)
         resp.raise_for_status()
         data = resp.json()
 
@@ -126,7 +174,10 @@ class TokenExchange:
         """
         url = f"{BASE_URL}/{JWT_TOKEN_CHECK_PATH}"
         headers = {HEADER_JWT_TOKEN: jwt_token, HEADER_REFRESH: "true"}
-        resp = requests.get(url, headers=headers, timeout=30)
+        self._check_cancelled()
+        resp = requests.get(url, headers=headers, timeout=(5, 15))
+        self._check_cancelled()
+        _log_response("refresh-token", url, resp, request_data=headers)
         resp.raise_for_status()
         data = resp.json()
 

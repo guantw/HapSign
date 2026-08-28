@@ -1,12 +1,16 @@
 """hap-sign-tool 封装 —— 对 hap 包签名。"""
 
-import subprocess
+import threading
 
 from hapsign import config
+from hapsign.subprocess_utils import run_process
 
 
 class HapSigner:
     """使用 hap-sign-tool.jar 对 hap 包签名。"""
+
+    def __init__(self, cancel_event: threading.Event | None = None) -> None:
+        self.cancel_event = cancel_event
 
     def sign_hap(
         self,
@@ -15,7 +19,7 @@ class HapSigner:
         p7b_path: str,
         p12_path: str,
         alias: str = config.KEY_ALIAS,
-        password: str = "123456",
+        password: str = config.KEYSTORE_PASSWORD,
         output_path: str = "",
     ) -> bool:
         """使用 hap-sign-tool sign-app 命令签名 hap。
@@ -67,7 +71,12 @@ class HapSigner:
             "-signCode",
             "1",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = run_process(
+            cmd,
+            capture_output=True,
+            text=True,
+            cancel_event=self.cancel_event,
+        )
         if result.returncode != 0:
             raise RuntimeError(
                 f"hap-sign-tool sign-app 失败 (code={result.returncode}): "

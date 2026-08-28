@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "platforms": {
+    "windows": {
+      "architecture": "x64",
+      "openharmony": {
+        "version": "6.1.0.31",
+        "api_version": "23",
+        "release": "6.1-Release",
+        "archive": {
+          "url": "https://repo.huaweicloud.com/openharmony/os/6.1-Release/ohos-sdk-windows_linux-public.tar.gz",
+          "sha256": "b833b75a64ee46bbd7880921abbb49b733ec5c8171b6684c9b524d57f624cee0",
+          "size": 2499936800
+        },
+        "toolchains_member": "toolchains-windows-x64-6.1.0.31-Release.zip",
+        "toolchains_sha256": "ee7ad339154504ddde74d07325ae378ead95a0bf357b62edf0c08d6b6d150688",
+        "files": {
+          "bin/hdc.exe": {
+            "archive_suffix": "hdc.exe",
+            "sha256": "0083c458f698c1f7e018fe845177f16716c146aadcb442b60ad996eb5b2f5560"
+          },
+          "bin/libusb_shared.dll": {
+            "archive_suffix": "libusb_shared.dll",
+            "sha256": "cbba1afa0c78fa39eb44c51aabb9ae93a146a9d515428b33dc2307373523e92a"
+          },
+          "lib/hap-sign-tool.jar": {
+            "archive_suffix": "lib/hap-sign-tool.jar",
+            "sha256": "91cea67369a8389e0cec60ebac6f2382d157515b9d96b0ef36b60b86ca528e9b"
+          },
+          "NOTICE.txt": {
+            "archive_suffix": "NOTICE.txt",
+            "sha256": "45664d1a732d46d69a576887ce2483bb8174f46959a9afd453ad3c28381cc6f4"
+          },
+          "oh-uni-package.json": {
+            "archive_suffix": "oh-uni-package.json",
+            "sha256": "0bdb26d146442042f26390c1aa4c61a0d0658122d3c4c70c79f75d3f890aec4d"
+          }
+        },
+        "libusb_source": {
+          "repository": "https://gitee.com/openharmony/third_party_libusb",
+          "commit": "b982552012b9faf15db3bd5c714594da91df33b0",
+          "path": "third_party/libusb/openharmony-third_party_libusb-b982552.tar.gz",
+          "sha256": "d6b7e36319a9aab07854e8bc89c458203697e7442ad66dd000c240df2a39a90c"
+        },
+        "source_repositories": {
+          "hap-sign-tool": "https://gitee.com/openharmony/developtools_hapsigner",
+          "hdc": "https://gitee.com/openharmony/developtools_hdc"
+        }
+      },
+      "java": {
+        "distribution": "Eclipse Temurin",
+        "version": "21.0.12+8",
+        "archive": {
+          "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip",
+          "sha256": "9ba963ee2371874a74185d18bc7bb2ab9407df7683300855ed7606e0662321d0",
+          "size": 205069442
+        },
+        "modules": [
+          "java.base",
+          "java.compiler",
+          "java.desktop",
+          "java.management",
+          "java.naming",
+          "java.rmi",
+          "java.scripting",
+          "java.sql",
+          "jdk.crypto.ec",
+          "jdk.unsupported"
+        ]
+      }
+    }
+  }
+}

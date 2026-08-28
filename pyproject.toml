@@ -23,11 +23,20 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
 ]
 dependencies = [
-    "playwright>=1.40,<2",
     "requests>=2.31,<3",
 ]
 
 [project.optional-dependencies]
+playwright = [
+    "playwright>=1.40,<2",
+]
+gui = [
+    "PySide6-Essentials>=6.8,<7",
+    "playwright>=1.40,<2",
+]
+bundle = [
+    "PyInstaller>=6.14,<7",
+]
 dev = [
     "pre-commit>=4,<5",
     "pytest>=8,<9",
@@ -38,9 +47,15 @@ dev = [
 [project.scripts]
 hapsign = "hapsign.cli:main"
 
+[project.gui-scripts]
+hapsign-app = "hapsign.gui:main"
+
 [project.urls]
 Homepage = "https://github.com/guantw/HapSign"
+Source = "https://github.com/guantw/HapSign"
 Issues = "https://github.com/guantw/HapSign/issues"
+Changelog = "https://github.com/guantw/HapSign/blob/master/CHANGELOG.md"
+Security = "https://github.com/guantw/HapSign/security"
 
 [tool.setuptools.dynamic]
 version = {attr = "hapsign.__version__"}
@@ -55,6 +70,7 @@ testpaths = ["tests"]
 [tool.coverage.run]
 branch = true
 source = ["hapsign"]
+omit = ["hapsign/gui.py"]
 
 [tool.coverage.report]
 fail_under = 58
