@@ -4,28 +4,56 @@
 
 > [!IMPORTANT]
 > 本项目是非官方工具，与华为无隶属或背书关系。它依赖可能变化的在线接口，仅用于合法的
-> 本机开发和调试。使用者应自行确认账号权限、数据安全以及相关服务条款。
+> 本机开发和调试。使用者应自行确认账号权限、数据安全以及相关服务条款。程序的数据流
+> 和本地保存行为见 [PRIVACY.md](PRIVACY.md)，第三方许可边界见
+> [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 工作原理
 
 ```
-Playwright 打开华为登录页（用户手动登录）
-  → 拿 tempToken → 换 accessToken
-  → 调华为云签名 API 生成 .cer / .p7b
-  → hap-sign-tool 签名 hap
-  → hdc install 安装到设备
+检测 HAP 是否已签名
+  ├─ 已签名 → hdc install 直接安装
+  └─ 未签名 →
+       Playwright 控制系统 Edge/Chrome 打开登录页（用户手动登录）
+         → 拿 tempToken → 换 accessToken
+         → 调华为云签名 API 生成 .cer / .p7b
+         → hap-sign-tool 签名 hap
+         → hdc install 安装到设备
 ```
 
 ## 前置条件
 
-1. **DevEco Studio** 已安装（需要其中的 JBR Java、hap-sign-tool.jar、hdc）
+1. **签名/设备工具链**：便携版已内置；源码运行可使用已准备的公开工具链或
+   DevEco Studio
 2. **Python 3.11+**（推荐使用 conda 或 venv 隔离环境）
 3. **HarmonyOS 设备**已通过 USB 连接并开启 USB 调试模式
 4. **华为开发者账号**（需要已完成实名认证）
 
-支持 **Windows** 与 **macOS**（命令行）。
+命令行支持 **Windows** 与 **macOS**；当前正式便携版为 Windows。
 
-## 安装
+## 直接使用 Windows 便携版（推荐）
+
+普通使用者不需要安装 Python、DevEco Studio、Java 或 HDC。到 GitHub Releases
+下载 `HapSign-portable-windows.zip` 及旁边的 `.zip.sha256` 校验文件，先在
+PowerShell 中核对下载完整性：
+
+```powershell
+Get-FileHash .\HapSign-portable-windows.zip -Algorithm SHA256
+Get-Content .\HapSign-portable-windows.zip.sha256
+```
+
+确认哈希一致后，将 ZIP 解压到当前用户可写的目录（不要放入 `Program Files`），
+双击 `HapSign.exe` 即可。精简包会复用系统 Edge/Chrome；如果发布页同时提供
+`HapSign-portable-windows-compat.zip`，它包含内置 Chromium，适合没有可用系统
+浏览器的电脑。
+
+首次使用时连接已开启 USB 调试的 HarmonyOS 设备，并在设备上确认调试授权；在窗口中
+点击“检测设备”，然后拖入或选择 `.hap`，点击“开始签名并安装”。未签名 HAP 会打开
+受控浏览器完成华为账号登录和验证码/二次验证，之后自动申请材料、签名并安装；已签名
+HAP 会跳过登录和签名直接安装。签名材料、日志和可选的签名后 HAP 的位置见
+[便携版说明](PORTABLE.md)。
+
+## 从源码安装
 
 ```bash
 # 克隆仓库
@@ -35,13 +63,28 @@ cd HapSign
 # 安装项目（提供 hapsign 命令）
 python -m pip install .
 
-# 安装 Playwright 浏览器（首次必须）
-playwright install chromium
 ```
 
-### 配置 DevEco Studio 路径
+源码桌面版默认由 Playwright 控制本机 Edge（其次 Chrome），仍会预授予登录页访问
+本地回调服务的权限，因此不同于直接调用系统默认浏览器的旧方案。Windows 10/11
+通常已经包含 Edge，不需要额外下载 Chromium。
 
-默认查找路径：
+如需使用内置 Chromium 兼容模式：
+
+```powershell
+$env:PLAYWRIGHT_BROWSERS_PATH = "0"
+python -m playwright install --no-shell chromium
+```
+
+桌面设置提供“受控系统浏览器”“内置 Chromium”和“非受控系统默认浏览器”三种
+模式；环境变量 `HAPSIGN_BROWSER` 可使用 `system_controlled`、`playwright`
+或 `system` 覆盖代码默认值。
+
+### 可选：配置 DevEco Studio 回退路径
+
+正式便携版不需要 DevEco Studio。源码运行时程序会优先使用已准备的公开工具链，只有
+在排查特定 DevEco 版本兼容性时才需要本机 DevEco 回退。程序会查找系统常见安装目录
+和 `D:\Program Files\Huawei\DevEco Studio`；如果安装在其他位置，设置环境变量：
 
 - Windows: `D:\Program Files\Huawei\DevEco Studio`
 - macOS: `/Applications/DevEco-Studio.app/Contents`
@@ -79,18 +122,87 @@ $env:HAPSIGN_PYTHON = "C:\path\to\your\python.exe"
 
 ## 使用
 
-### 方式一：命令行（Windows / macOS）
+### 方式一：桌面应用（推荐）
+
+安装 GUI 依赖后运行：
+
+```bash
+python -m pip install -e ".[gui]"
+hapsign-app
+```
+
+桌面版支持点击选择或拖入 `.hap` 文件，也可以点击右侧文件卡片的“×”移除误选
+文件。可随时点击“检测设备”确认 HDC 连接状态，并在后台完成登录、签名和安装。
+进度条会按设备检测、账号授权、证书申请、签名和安装等实际阶段推进。执行期间
+可以点击“取消”；关闭窗口时会询问是否中断，完成子进程和 HDC 清理后再退出，
+取消后的同一窗口可以直接重新开始完整流程。
+开始流程时还会自动执行一次设备可用性检查，未连接、未授权或同时连接多台设备
+时不会继续。运行记录和错误会直接显示在窗口中。
+
+标题栏的“设置”可选择登录浏览器、签名文件保存位置和日志级别，并能直接打开
+签名目录或日志目录。诊断日志默认写到程序目录的 `logs/hapsign.log`，单个文件
+最多 4 MiB，保留 3 份轮转备份。敏感诊断默认关闭；主动开启并选择 DEBUG 后，
+日志可能包含 token、用户标识和完整 API 请求/响应，但始终不会记录密钥库密码。
+“保留最新一个签名后的 HAP”默认开启：最终 HAP 固定写到程序目录的
+`signed_haps/`，新文件成功生成后只清理 HapSign 清单记录的旧产物，不会删除
+目录中未记录的用户 HAP；当前输入文件也会受到保护。关闭后程序使用临时文件安装，
+任务结束即删除。
+
+如果 HDC server 原本未运行，程序会在本次任务结束时关闭自己拉起的后台服务；
+如果 DevEco Studio 或其他工具已经启动 HDC server，则会保留该既有服务。
+
+### 方式二：bat 拖拽
+
+将 `.hap` 文件直接拖到 `sign_install.bat` 上，自动完成签名+安装。
+
+### 方式三：命令行（Windows / macOS）
 
 ```bash
 hapsign --hap path/to/app-unsigned.hap
+hapsign --hap path/to/app-signed.hap   # 已签名则跳过签名，直接安装
 ```
 
 包名会自动从 hap 内的 `module.json` 提取，无需手动指定。
+若 HAP 已包含签名块（Hap Signing Block），会跳过登录与签名，直接安装原文件。
 源码目录中仍可使用 `python main.py --hap ...`。
 
-### 方式二：拖拽（仅 Windows）
+### 构建便携版
 
-将 `.hap` 文件直接拖到 `sign_install.bat` 上，自动完成签名+安装。
+便携版是一个可直接解压运行的目录，不要求目标电脑安装 Python 或 DevEco Studio。
+Windows 正式包使用锁定并校验的 OpenHarmony 6.1 公共工具链和 Eclipse Temurin
+21。首次构建先准备工具链，再打包：
+
+```bash
+python -m pip install -e ".[gui,bundle]"
+python scripts/prepare_toolchain.py
+python scripts/build_portable.py
+```
+
+`prepare_toolchain.py` 会校验 `toolchain.lock.json` 中的大小和 SHA-256，只从
+OpenHarmony 公共 SDK 提取 HDC、libusb、hap-sign-tool 和 NOTICE，再用 Temurin
+JDK 的 `jlink` 生成精简 Java 运行时。公共 SDK 下载约 2.5 GB，但只在构建缓存中
+保留；最终工具链约 66 MiB。已有下载可用 `--sdk-archive` 和 `--jdk-archive`
+传入，仍会执行相同校验。
+
+默认产物复用系统 Edge/Chrome，不包含 Chromium。要生成包含内置 Chromium 的兼容
+包，PowerShell 中执行：
+
+```powershell
+$env:PLAYWRIGHT_BROWSERS_PATH = "0"
+python -m playwright install --no-shell chromium
+python scripts/build_portable.py --keep-bundled-browser
+```
+
+输出文件为 `dist/HapSign-portable-<platform>.zip`。Windows、macOS 和 Linux
+产物需要在各自平台分别构建。便携版使用说明见 [PORTABLE.md](PORTABLE.md)，
+完整构建步骤见 [docs/PACKAGING.md](docs/PACKAGING.md)。
+
+> [!NOTE]
+> 当前锁定的 OpenHarmony 公共工具链是 `6.1.0.31 / API 23`（HDC 3.2.0c），
+> 并非 DevEco 6.1.1.125 中较新的 API 24 版本。现有签名产物验证、实际重签名和
+> 设备识别已经通过；正式发布仍应按
+> [开源发布门禁](docs/OPEN_SOURCE_RELEASE.md) 完成真实设备安装回归。
+> `--allow-deveco-toolchain` 只用于排障回退，其产物不得冒充锁定的公开构建。
 
 ### 完整参数
 
@@ -98,7 +210,7 @@ hapsign --hap path/to/app-unsigned.hap
 hapsign --hap <hap路径> [选项]
 
 选项:
-  --hap               未签名的 hap 文件路径（必填）
+  --hap               hap 文件路径（必填；已签名则直接安装）
   --bundle-name       应用包名（不传则从 hap 内自动提取）
   --country           国家码，默认 CN
   --device-type       设备类型码，默认 4
@@ -133,12 +245,28 @@ hapsign --hap app.hap --enable-capability
 
 此模式通过 `add.real.provision` API 创建 Real Profile（provisionType=1），对应 DevEco Studio 6.1+ 的 `enableCapability` 路径。需要应用已在 AGC（AppGallery Connect）注册且当前账号有访问权限，否则自动回退到 Test Profile。
 
-### 签名后的文件
+### 签名文件和缓存位置
 
-签名后的 hap 和签名材料保存在 `signing_files/{bundle_name}/` 下：
+桌面版和便携版默认把签名材料保存在程序目录旁，解压目录可以整体移动：
+
+```text
+HapSign/
+├── HapSign.exe
+├── signing_files/
+    ├── .token_cache.json
+    └── <bundle_name>/
+└── signed_haps/                 # 最新一个签名 HAP（可在设置中关闭）
+```
+
+源码 CLI 默认保存在启动命令时所在目录的
+`signing_files/<bundle_name>/`；传入 `--work-dir` 可以指定其他目录。
+程序目录必须可写，不建议把便携版解压到 `Program Files` 等受保护目录。
+桌面版“设置”中还可以改为用户 `AppData Local` 或任意自定义目录。
+
+成功完成一次未签名 HAP 的签名后，目录内容如下：
 
 ```
-signing_files/com.example.myapp/
+<签名目录>/com.example.myapp/
 ├── auto_debug_com.example.myapp.p12   # 密钥库
 ├── auto_debug_com.example.myapp.csr   # CSR
 ├── auto_debug_com.example.myapp.cer   # 调试证书
@@ -146,6 +274,8 @@ signing_files/com.example.myapp/
 ├── metadata.json                        # 缓存元数据
 └── entry-default-unsigned_signed.hap   # 签名后的 hap
 ```
+
+如果输入 HAP 本身已经签名，程序会直接安装原文件，不会生成上述签名材料。
 
 ## 缓存策略
 
@@ -163,6 +293,8 @@ signing_files/com.example.myapp/
 
 - 登录验证码 / 二次验证需要用户在浏览器中手动处理
 - 拖拽安装脚本仅支持 Windows（`sign_install.bat`）；macOS 请使用 `hapsign` 命令行
+- 当前提供并完整验证的是 Windows 便携版；macOS/Linux 已预留运行时路径，
+  仍需分别增加锁定的公开工具包并在对应系统构建、实机验证
 - 签名流程依赖华为云 API，需要有网络连接和华为开发者账号
 
 ## 开发与贡献
@@ -183,10 +315,12 @@ python -m pytest --cov
 hapsign/
 ├── cli.py                # 命令行参数和入口
 ├── config.py             # 配置常量（域名、SDK 路径、API 端点、密钥参数）
+├── gui.py                # PySide6 桌面界面
 ├── models.py             # 数据模型
 ├── pipeline.py           # 全流程编排（缓存、登录、签名、安装）
+├── runtime.py            # 用户数据目录与跨平台工具链发现
 ├── login/
-│   └── browser_login.py  # Playwright 浏览器登录
+│   └── browser_login.py  # 受控系统浏览器、内置 Chromium 与普通浏览器备用后端
 ├── token/
 │   └── token_exchange.py # tempToken → JWT → accessToken
 ├── api/
@@ -197,12 +331,17 @@ hapsign/
 │   └── capability_api.py # 应用信息 API (app brief info)
 └── signing/
     ├── keytool_util.py   # keytool 生成 EC 密钥对 + CSR
+    ├── hap_inspect.py    # 检测 HAP 是否已签名
     ├── hap_signer.py     # hap-sign-tool 签名 hap
     └── installer.py     # hdc install / 获取 UDID
 ```
 
 ## License
 
-本项目使用 [MIT License](LICENSE)。参与项目需遵守 [Code of Conduct](CODE_OF_CONDUCT.md)。
+HapSign 自身源代码使用 [MIT License](LICENSE)。第三方依赖和便携包工具链保持各自
+许可，不因本项目采用 MIT 而改变，详见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。隐私与本地数据说明见
+[PRIVACY.md](PRIVACY.md)，参与项目需遵守
+[Code of Conduct](CODE_OF_CONDUCT.md)。
 
 Powered by [BitFun](https://github.com/GCWing/BitFun)

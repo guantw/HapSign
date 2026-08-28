@@ -7,20 +7,29 @@
 - code=4000 或 HTTP 401 表示 token 失效
 """
 
+import logging
+import threading
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
+from hapsign.cancellation import raise_if_cancelled
 from hapsign.config import (
+    ACCEPT_LANGUAGE,
     BASE_URL,
     CLOUD_BASE_URL,
     ERR_TOKEN_INVALID_CODE,
-    HEADER_ACCEPT_LANG,
+    HEADER_ACCEPT_LANGUAGE,
     HEADER_OAUTH2_TOKEN,
     HEADER_TEAM_ID,
     HEADER_UID,
     HEADER_USER_AGENT,
+    USER_AGENT,
 )
+from hapsign.diagnostics import sensitive_logging_enabled
+
+logger = logging.getLogger(__name__)
 
 
 class TokenExpiredError(Exception):
@@ -38,6 +47,7 @@ class HuaweiSignClient:
         access_token: str,
         uid: str,
         base_url: str = CLOUD_BASE_URL,
+        cancel_event: threading.Event | None = None,
     ):
         """初始化客户端。
 
@@ -49,6 +59,10 @@ class HuaweiSignClient:
         self.access_token = access_token
         self.uid = uid
         self.base_url = base_url.rstrip("/")
+        self.cancel_event = cancel_event
+
+    def _check_cancelled(self) -> None:
+        raise_if_cancelled(self.cancel_event)
 
     def _get_headers(self, team_id: str | None = None) -> dict[str, str]:
         """构造请求头。
@@ -62,8 +76,8 @@ class HuaweiSignClient:
         headers = {
             HEADER_OAUTH2_TOKEN: self.access_token,
             HEADER_UID: self.uid,
-            HEADER_USER_AGENT: "Chrome/49.0.2623.75",
-            HEADER_ACCEPT_LANG: "zh-CN",
+            HEADER_USER_AGENT: USER_AGENT,
+            HEADER_ACCEPT_LANGUAGE: ACCEPT_LANGUAGE,
         }
         if team_id is not None:
             headers[HEADER_TEAM_ID] = team_id
@@ -110,6 +124,52 @@ class HuaweiSignClient:
         except (ValueError, AttributeError):
             pass
 
+    def _log_http(
+        self,
+        method: str,
+        url: str,
+        response: requests.Response,
+        *,
+        headers: dict[str, str],
+        payload: object = None,
+    ) -> None:
+        """记录足以定位接口变更的元数据；完整载荷由敏感开关控制。"""
+        parsed = urlparse(url)
+        response_keys: list[str] = []
+        business_code: object = None
+        try:
+            decoded = response.json()
+            if isinstance(decoded, dict):
+                response_keys = sorted(str(key) for key in decoded)
+                ret = decoded.get("ret")
+                business_code = (
+                    ret.get("code") if isinstance(ret, dict) else decoded.get("code")
+                )
+        except (ValueError, AttributeError):
+            pass
+        content = getattr(response, "content", b"")
+        response_size = len(content) if isinstance(content, (bytes, str)) else -1
+        logger.debug(
+            "[api] %s %s://%s%s status=%d bytes=%d keys=%s code=%r",
+            method,
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            response.status_code,
+            response_size,
+            response_keys,
+            business_code,
+        )
+        if sensitive_logging_enabled():
+            logger.debug(
+                "[api] sensitive %s %s headers=%r payload=%r response=%r",
+                method,
+                url,
+                headers,
+                payload,
+                response.text,
+            )
+
     def _do_get(
         self,
         url: str,
@@ -118,7 +178,10 @@ class HuaweiSignClient:
     ) -> dict[str, Any]:
         """执行 GET 请求并返回解析后的 JSON。"""
         full_url = self._build_url(url)
-        resp = requests.get(full_url, headers=headers, params=params, timeout=30)
+        self._check_cancelled()
+        resp = requests.get(full_url, headers=headers, params=params, timeout=(5, 15))
+        self._check_cancelled()
+        self._log_http("GET", full_url, resp, headers=headers, payload=params)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.json()
@@ -131,7 +194,10 @@ class HuaweiSignClient:
     ) -> dict[str, Any]:
         """执行 POST form-encoded 请求并返回解析后的 JSON。"""
         full_url = self._build_url(url)
-        resp = requests.post(full_url, headers=headers, data=params, timeout=30)
+        self._check_cancelled()
+        resp = requests.post(full_url, headers=headers, data=params, timeout=(5, 15))
+        self._check_cancelled()
+        self._log_http("POST", full_url, resp, headers=headers, payload=params)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.json()
@@ -144,7 +210,10 @@ class HuaweiSignClient:
     ) -> dict[str, Any]:
         """执行 POST JSON 请求并返回解析后的 JSON。"""
         full_url = self._build_url(url)
-        resp = requests.post(full_url, headers=headers, json=data, timeout=30)
+        self._check_cancelled()
+        resp = requests.post(full_url, headers=headers, json=data, timeout=(5, 15))
+        self._check_cancelled()
+        self._log_http("POST", full_url, resp, headers=headers, payload=data)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.json()
@@ -157,7 +226,10 @@ class HuaweiSignClient:
     ) -> dict[str, Any]:
         """执行 DELETE 请求（带 JSON body）并返回解析后的 JSON。"""
         full_url = self._build_url(url)
-        resp = requests.delete(full_url, headers=headers, json=data, timeout=30)
+        self._check_cancelled()
+        resp = requests.delete(full_url, headers=headers, json=data, timeout=(5, 15))
+        self._check_cancelled()
+        self._log_http("DELETE", full_url, resp, headers=headers, payload=data)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.json()
@@ -174,7 +246,10 @@ class HuaweiSignClient:
         Java 通过 responseContent.contains('"code":0') 检查成功。
         """
         full_url = self._build_url(url)
-        resp = requests.post(full_url, headers=headers, data=params, timeout=30)
+        self._check_cancelled()
+        resp = requests.post(full_url, headers=headers, data=params, timeout=(5, 15))
+        self._check_cancelled()
+        self._log_http("POST", full_url, resp, headers=headers, payload=params)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.text
@@ -187,7 +262,10 @@ class HuaweiSignClient:
     ) -> str:
         """执行 DELETE 请求（带 JSON body）并返回原始响应文本。"""
         full_url = self._build_url(url)
-        resp = requests.delete(full_url, headers=headers, json=data, timeout=30)
+        self._check_cancelled()
+        resp = requests.delete(full_url, headers=headers, json=data, timeout=(5, 15))
+        self._check_cancelled()
+        self._log_http("DELETE", full_url, resp, headers=headers, payload=data)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.text
@@ -204,7 +282,10 @@ class HuaweiSignClient:
         Java 通过 responseContent.contains('"code":0') 检查成功。
         """
         full_url = self._build_url(url)
-        resp = requests.post(full_url, headers=headers, json=data, timeout=30)
+        self._check_cancelled()
+        resp = requests.post(full_url, headers=headers, json=data, timeout=(5, 15))
+        self._check_cancelled()
+        self._log_http("POST", full_url, resp, headers=headers, payload=data)
         self._check_response(resp)
         resp.raise_for_status()
         return resp.text

@@ -8,7 +8,32 @@
 from typing import Any
 
 from hapsign.api.client import HuaweiSignClient
-from hapsign.config import API_DEVICE_ADD, API_DEVICE_LIST, ERR_DEVICE_DUPLICATE
+from hapsign.config import (
+    API_DEVICE_ADD,
+    API_DEVICE_LIST,
+    ERR_DEVICE_DUPLICATE,
+    ERR_DEVICE_UDID_DUPLICATE,
+)
+
+_DEVICE_ALREADY_EXISTS_CODES = {
+    str(ERR_DEVICE_DUPLICATE),
+    str(ERR_DEVICE_UDID_DUPLICATE),
+}
+
+
+def _is_device_already_exists(value: Any) -> bool:
+    text = str(value)
+    return any(code in text for code in _DEVICE_ALREADY_EXISTS_CODES)
+
+
+def _extract_response_code(data: Any) -> Any:
+    """从签名 API 响应提取业务 code（顶层或 ret 嵌套）。"""
+    if not isinstance(data, dict):
+        return None
+    ret = data.get("ret")
+    if isinstance(ret, dict) and "code" in ret:
+        return ret.get("code")
+    return data.get("code")
 
 
 class DeviceAPI:
@@ -34,7 +59,8 @@ class DeviceAPI:
         POST form {API_DEVICE_ADD}
         参数：deviceName（自动生成）、udid（设备唯一标识）、deviceType（设备类型码）。
 
-        重复设备（错误码 205389857）视为成功。
+        设备名称重复（205389857）或 UDID 已注册（205389858）视为成功，
+        后续从设备列表复用已有记录。
 
         Args:
             udid: 设备 UDID（64 位十六进制字符串）。
@@ -61,14 +87,20 @@ class DeviceAPI:
             "deviceType": device_type,
         }
         try:
-            self._client._do_post_form(API_DEVICE_ADD, headers, params)
+            data = self._client._do_post_form(API_DEVICE_ADD, headers, params)
         except Exception as exc:
-            err_msg = str(exc)
-            if str(ERR_DEVICE_DUPLICATE) in err_msg:
+            # HTTP 层失败时仍兼容逆向场景：错误信息里可能直接带业务码
+            if _is_device_already_exists(exc):
                 return True
             raise
 
-        return True
+        # 200 响应也可能返回业务错误码（与 DevEco 行为一致）
+        code = _extract_response_code(data)
+        if code in (None, 0, "0"):
+            return True
+        if _is_device_already_exists(code):
+            return True
+        raise RuntimeError(f"add_device failed: {data}")
 
     def get_device_list(self, team_id: str) -> list[dict[str, Any]]:
         """查询已注册的设备列表。

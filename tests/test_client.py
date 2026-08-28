@@ -1,12 +1,22 @@
 """HTTP 客户端响应处理测试。"""
 
+import logging
 from unittest.mock import Mock
 
 import pytest
 
 from hapsign.api import client as client_module
 from hapsign.api.client import HuaweiSignClient, TokenExpiredError
-from hapsign.config import HEADER_OAUTH2_TOKEN, HEADER_TEAM_ID, HEADER_UID
+from hapsign.config import (
+    ACCEPT_LANGUAGE,
+    HEADER_ACCEPT_LANGUAGE,
+    HEADER_OAUTH2_TOKEN,
+    HEADER_TEAM_ID,
+    HEADER_UID,
+    HEADER_USER_AGENT,
+    USER_AGENT,
+)
+from hapsign.diagnostics import set_sensitive_logging
 
 
 def test_headers_include_credentials_and_optional_team() -> None:
@@ -17,6 +27,12 @@ def test_headers_include_credentials_and_optional_team() -> None:
     assert headers[HEADER_OAUTH2_TOKEN] == "access-token"
     assert headers[HEADER_UID] == "user-id"
     assert headers[HEADER_TEAM_ID] == "team-id"
+    assert headers[HEADER_USER_AGENT] == USER_AGENT
+    assert headers[HEADER_ACCEPT_LANGUAGE] == ACCEPT_LANGUAGE
+    assert HEADER_USER_AGENT == "User-Agent"
+    assert HEADER_ACCEPT_LANGUAGE == "Accept-Language"
+    assert "Chrome/" in headers[HEADER_USER_AGENT]
+    assert USER_AGENT not in headers  # 值不能被误当成 header 名
 
 
 @pytest.mark.parametrize(
@@ -80,3 +96,44 @@ def test_request_helpers(monkeypatch, method_name, request_name, expected) -> No
 
     assert result == expected
     response.raise_for_status.assert_called_once()
+
+
+def test_http_diagnostics_require_sensitive_switch(caplog) -> None:
+    response = Mock(
+        status_code=200,
+        content=b'{"secret":"response-secret"}',
+        text='{"secret":"response-secret"}',
+    )
+    response.json.return_value = {"ret": {"code": 0}, "secret": "response-secret"}
+    client = HuaweiSignClient("access-token", "user-id")
+    caplog.set_level(logging.DEBUG)
+
+    try:
+        set_sensitive_logging(False)
+        client._log_http(
+            "POST",
+            "https://example.invalid/path?secret=query-secret",
+            response,
+            headers={"oauth2Token": "header-secret"},
+            payload={"token": "payload-secret"},
+        )
+        assert "header-secret" not in caplog.text
+        assert "payload-secret" not in caplog.text
+        assert "response-secret" not in caplog.text
+        assert "query-secret" not in caplog.text
+
+        caplog.clear()
+        set_sensitive_logging(True)
+        client._log_http(
+            "POST",
+            "https://example.invalid/path?secret=query-secret",
+            response,
+            headers={"oauth2Token": "header-secret"},
+            payload={"token": "payload-secret"},
+        )
+        assert "header-secret" in caplog.text
+        assert "payload-secret" in caplog.text
+        assert "response-secret" in caplog.text
+        assert "query-secret" in caplog.text
+    finally:
+        set_sensitive_logging(False)

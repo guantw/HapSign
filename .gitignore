@@ -6,7 +6,9 @@ dist/
 build/
 *.egg
 .pytest_cache/
+.test-tmp*/
 .ruff_cache/
+.venv-codex/
 .mypy_cache/
 .coverage
 coverage.xml
@@ -14,7 +16,11 @@ htmlcov/
 
 # 签名产物（证书、密钥、Profile、签名后的 hap）
 signing_files/
+signed_haps/
+logs/
+hapsign-config.json
 output/
+/*.hap
 
 # 反编译参考源码（不参与运行，体积过大）
 reverse/
@@ -24,6 +30,9 @@ reverse/
 .vscode/
 *.swp
 *.swo
+
+# 本地运行脚本（含个人环境变量，不提交）
+run_sign_install.bat
 
 # OS
 Thumbs.db
