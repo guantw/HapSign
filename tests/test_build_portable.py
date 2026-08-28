@@ -101,6 +101,11 @@ def test_smoke_artifact_cleanup_preserves_application_files(tmp_path) -> None:
 def test_python_dependency_licenses_are_copied(tmp_path, monkeypatch) -> None:
     portable = tmp_path / "HapSign"
     portable.mkdir()
+    python_root = tmp_path / "python"
+    python_root.mkdir()
+    (python_root / "LICENSE.txt").write_text("Python license\n", encoding="utf-8")
+    # 不依赖各平台 Python 发行版是否把 LICENSE.txt 放在 base_prefix 根目录。
+    monkeypatch.setattr(build_portable.sys, "base_prefix", str(python_root))
     monkeypatch.setattr(
         build_portable,
         "PYTHON_RUNTIME_DISTRIBUTIONS",

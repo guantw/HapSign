@@ -145,6 +145,8 @@ def test_stop_process_terminates_tree_via_job(monkeypatch) -> None:
     process.poll.return_value = None
     terminated = []
     tree_killed = []
+    # 该用例覆盖 Windows 的 Job Object + taskkill 路径，不依赖 CI 主机系统。
+    monkeypatch.setattr(subprocess_utils.os, "name", "nt")
     monkeypatch.setattr(subprocess_utils, "_terminate_job", terminated.append)
     monkeypatch.setattr(subprocess_utils, "_terminate_windows_tree", tree_killed.append)
 
