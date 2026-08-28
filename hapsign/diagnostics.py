@@ -28,6 +28,7 @@ _AUTHORIZATION_RE = re.compile(
     r"(?P<value>[^&,\s}'\"\]\)]+)"
 )
 _BEARER_TOKEN_RE = re.compile(r"(?i)(?P<prefix>\bBearer\s+)(?P<value>[^\s,}'\"\]\)]+)")
+_DEVICE_UDID_RE = re.compile(r"(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 
 
 def set_sensitive_logging(enabled: bool) -> None:
@@ -42,7 +43,7 @@ def sensitive_logging_enabled() -> bool:
 
 
 def redact_sensitive_text(value: object) -> str:
-    """脱敏异常文本中的令牌、密码和授权参数。
+    """脱敏异常文本中的令牌、密码、授权参数和设备 UDID。
 
     敏感诊断开关是显式选择，开启后保留原始文本以便定位协议问题；默认日志
     必须避免把认证信息写入控制台、文件或 GUI 日志窗口。
@@ -62,10 +63,11 @@ def redact_sensitive_text(value: object) -> str:
         lambda match: f"{match.group('key')}{match.group('separator')}<redacted>",
         text,
     )
-    return _BEARER_TOKEN_RE.sub(
+    text = _BEARER_TOKEN_RE.sub(
         lambda match: f"{match.group('prefix')}<redacted>",
         text,
     )
+    return _DEVICE_UDID_RE.sub("<redacted-udid>", text)
 
 
 def configure_file_logging(settings: AppSettings) -> Path:

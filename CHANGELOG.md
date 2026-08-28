@@ -56,6 +56,8 @@
 
 ### Fixed
 
+- CLI 不再把缺少 HDC 可执行文件归类为输入错误；`devices`、`install` 等运行时
+  HDC 失败现在返回 `operation_failed` 和退出码 1。
 - HTTP 客户端正确发送 `User-Agent` / `Accept-Language` 请求头。
 - Token 缓存缺少 `jwt_token` 时不再复用，避免后续刷新失败。
 - 设备注册将业务层重复错误码视为成功，并保留 HTTP 错误信息中的兼容判定。
@@ -74,6 +76,8 @@
 
 ### Security
 
+- CLI、Pipeline 和诊断日志会脱敏异常文本中的完整 64 位设备 UDID；失败 JSON
+  stdout 不再泄露 `DeviceAPI.find_device_id()` 等异常携带的设备标识。
 - 登录回调服务仅监听 loopback 地址。
 - 日志默认不包含 token、完整请求体、CSRF code 或完整登录 URL；只有用户主动开启
   “敏感诊断”且使用 DEBUG 级别时才记录完整网络载荷，密钥库密码始终排除。

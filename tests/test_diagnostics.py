@@ -64,3 +64,17 @@ def test_redact_sensitive_text_hides_tokens_and_bearer_headers() -> None:
     assert "tempToken=<redacted>" in text
     assert "accessToken=<redacted>" in text
     assert "Authorization: Bearer <redacted>" in text
+
+
+def test_redact_sensitive_text_hides_device_udid() -> None:
+    diagnostics.set_sensitive_logging(False)
+    udid = "A" * 64
+
+    text = diagnostics.redact_sensitive_text(
+        f"Device not found in list: {udid}; request_id={udid}0"
+    )
+
+    assert udid not in text.split(";", 1)[0]
+    assert "Device not found in list: <redacted-udid>" in text
+    # 不应截断更长的十六进制诊断标识。
+    assert f"request_id={udid}0" in text

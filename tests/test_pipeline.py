@@ -359,6 +359,7 @@ def test_pipeline_failure_logs_redacted_exception(
     set_sensitive_logging(False)
     pipeline = _pipeline(tmp_path, monkeypatch)
     secret = "secret-temp-token"
+    device_udid = "A" * 64
     caplog.set_level(logging.DEBUG, logger="hapsign.pipeline")
 
     result = pipeline._run_steps(
@@ -368,7 +369,8 @@ def test_pipeline_failure_logs_redacted_exception(
                 Mock(
                     side_effect=RuntimeError(
                         "request failed: "
-                        f"/authrouter/auth/api/temptoken/check?tempToken={secret}"
+                        f"/authrouter/auth/api/temptoken/check?tempToken={secret}; "
+                        f"Device not found in list: {device_udid}"
                     )
                 ),
             )
@@ -380,6 +382,9 @@ def test_pipeline_failure_logs_redacted_exception(
     assert "tempToken=<redacted>" in caplog.text
     assert secret not in pipeline.last_error
     assert "tempToken=<redacted>" in pipeline.last_error
+    assert device_udid not in caplog.text
+    assert device_udid not in pipeline.last_error
+    assert "Device not found in list: <redacted-udid>" in pipeline.last_error
 
 
 def test_token_cache_protect_failure_keeps_old_file(tmp_path, monkeypatch) -> None:
