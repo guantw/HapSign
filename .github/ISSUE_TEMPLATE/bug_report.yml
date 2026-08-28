@@ -1,0 +1,67 @@
+name: Bug report
+description: 报告可复现的功能问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        不要上传 token、证书、私钥、完整敏感日志、设备 UDID 或用户 HAP。
+        安全漏洞请按 SECURITY.md 使用私密渠道。
+  - type: input
+    id: version
+    attributes:
+      label: HapSign 版本
+      description: 版本号、commit 或 Release 名称
+    validations:
+      required: true
+  - type: dropdown
+    id: distribution
+    attributes:
+      label: 运行方式
+      options:
+        - Windows 精简便携包
+        - Windows Chromium 兼容包
+        - Python 源码 GUI
+        - Python CLI
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: Windows/macOS/Linux 版本、显示缩放、DevEco/SDK 版本（若相关）
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果与已脱敏日志
+      description: 请先关闭敏感诊断，删除 token、账号、UDID、路径用户名等信息。
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: 提交确认
+      options:
+        - label: 我已确认内容不含账号凭据、私钥、UDID、用户 HAP 或其他敏感数据。
+          required: true
