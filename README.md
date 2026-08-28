@@ -61,7 +61,18 @@ $env:DEVECO_HOME = "E:\DevEco Studio"
 
 调试密钥库默认使用兼容 DevEco 调试流程的固定密码。如需覆盖，请设置：
 
+```bat
+:: Windows CMD
+set HAPSIGN_KEYSTORE_PASSWORD=使用你自己的强密码
+```
+
+```powershell
+# Windows PowerShell
+$env:HAPSIGN_KEYSTORE_PASSWORD = "使用你自己的强密码"
+```
+
 ```bash
+# macOS / Linux shell
 export HAPSIGN_KEYSTORE_PASSWORD="使用你自己的强密码"
 ```
 
