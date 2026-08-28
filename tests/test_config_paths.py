@@ -2,6 +2,7 @@
 
 import os
 
+from hapsign import pipeline
 from hapsign.config import default_deveco_home, resolve_sdk_paths
 
 
@@ -9,6 +10,17 @@ def test_default_deveco_home_by_platform() -> None:
     assert default_deveco_home("darwin") == "/Applications/DevEco-Studio.app/Contents"
     assert default_deveco_home("win32") == r"D:\Program Files\Huawei\DevEco Studio"
     assert default_deveco_home("linux") == "/opt/DevEco-Studio"
+
+
+def test_default_state_dir_is_hidden_folder_under_home(tmp_path, monkeypatch) -> None:
+    class FakePath:
+        @staticmethod
+        def home():
+            return tmp_path
+
+    monkeypatch.setattr(pipeline, "Path", FakePath)
+
+    assert pipeline.default_state_dir() == str((tmp_path / ".hapsign").resolve())
 
 
 def test_resolve_sdk_paths_darwin() -> None:

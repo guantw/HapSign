@@ -10,12 +10,13 @@ vulnerability reporting；启用后请使用仓库 Security 页的“Report a vu
 
 ## 本地敏感数据
 
-hapsign 默认会在程序目录的 `signing_files/` 中保存当日 token 缓存、调试证书、
-Profile 和 `.p12` 密钥库，以避免重复登录和申请。这些文件已被 `.gitignore`
-排除，但仍是本机敏感数据。Windows 上 token 缓存通过当前用户作用域的 DPAPI
+桌面/便携版默认会在程序目录的 `signing_files/` 中保存当日 token 缓存、调试证书、
+Profile 和 `.p12` 密钥库；CLI 默认使用用户主目录的 `~/.hapsign/`（Windows 为
+`%USERPROFILE%\.hapsign\`）。这些文件已被 `.gitignore` 排除，但仍是本机敏感
+数据。Windows 上 token 缓存通过当前用户作用域的 DPAPI
 （CryptProtectData）静态加密后落盘，其他平台退化为受限权限（仅当前用户可读）
 的明文存储，并在首次保存时打印告警；请勿把缓存目录放入云同步目录，在共享电脑
-上使用后应删除该目录。移动或分享便携目录前应先移除 `signing_files/`；桌面设置
+上使用后应删除对应目录。移动或分享便携目录前应先移除 `signing_files/`；桌面设置
 可改为用户 AppData Local 或自定义目录；同样应按敏感数据目录保护。
 程序目录的 `signed_haps/` 可能包含用户应用代码，移动或分享便携目录前也应检查；
 可在设置中关闭保留签名 HAP。

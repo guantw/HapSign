@@ -156,13 +156,26 @@ def _process_start_time_posix(pid: int) -> float | None:
 class Installer:
     """使用 hdc 获取设备 UDID 并安装 hap 包。"""
 
-    def __init__(self, cancel_event: threading.Event | None = None) -> None:
+    def __init__(
+        self,
+        cancel_event: threading.Event | None = None,
+        serial: str | None = None,
+    ) -> None:
         self._hdc = config.HDC_PATH
         self.cancel_event = cancel_event
+        self.serial = serial
         # 本任务确认创建、close 时应清理的 HDC server 监听 PID；None 表示不归属
         self._owned_server_pid: int | None = None
         self._server_checked = False
         self._closed = False
+
+    def _device_command(self, *args: str) -> list[str]:
+        """构建设备命令；指定 serial 时显式选择目标，避免 HDC 隐式歧义。"""
+        command = [self._hdc]
+        if self.serial:
+            command.extend(["-t", self.serial])
+        command.extend(args)
+        return command
 
     def __enter__(self) -> Installer:
         return self
@@ -296,8 +309,9 @@ class Installer:
         """
         self._ensure_server()
         commands = [
-            [self._hdc, "shell", "bm", "get", "-u"],
-            [self._hdc, "shell", "param", "get", "const.product.udid"],
+            self._device_command("shell", "bm", "get", "--udid"),
+            self._device_command("shell", "bm", "get", "-u"),
+            self._device_command("shell", "param", "get", "const.product.udid"),
         ]
         for cmd in commands:
             try:
@@ -319,6 +333,78 @@ class Installer:
             "未检测到可用设备：请确认设备已连接、已授权 USB 调试，且当前只连接一台设备"
         )
 
+    def list_targets(self, connected_only: bool = False) -> list[dict[str, object]]:
+        """列出 HDC targets，返回适合 CLI JSON 输出的非敏感设备信息。"""
+        self._ensure_server()
+        result = run_process(
+            [self._hdc, "list", "targets", "-v"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cancel_event=self.cancel_event,
+        )
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"hdc list targets 失败: {output}")
+
+        targets: list[dict[str, object]] = []
+        for raw_line in result.stdout.splitlines():
+            parts = raw_line.strip().split()
+            if not parts or parts[0].startswith("["):
+                continue
+            serial = parts[0]
+            transport = parts[1] if len(parts) > 1 else ""
+            status = parts[2] if len(parts) > 2 else ""
+            host = " ".join(parts[3:]) if len(parts) > 3 else ""
+            connected = status.lower() == "connected"
+            usb = transport.upper() == "USB"
+            localhost = serial.startswith(("127.0.0.1:", "localhost:"))
+            if connected_only and not connected:
+                continue
+            targets.append(
+                {
+                    "serial": serial,
+                    "transport": transport,
+                    "status": status,
+                    "host": host,
+                    "connected": connected,
+                    "usb": usb,
+                    "localhost": localhost,
+                    "physical_candidate": usb and connected,
+                    "likely_emulator": localhost and not usb,
+                }
+            )
+        return targets
+
+    def inspect_bundle(self, bundle_name: str) -> dict[str, str] | None:
+        """查询已安装 bundle；不存在或输出不匹配时返回 None。"""
+        self._ensure_server()
+        result = run_process(
+            self._device_command("shell", "bm", "dump", "-n", bundle_name),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            cancel_event=self.cancel_event,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        bundle_match = re.search(r'"bundleName"\s*:\s*"([^"]+)"', output)
+        if (
+            result.returncode != 0
+            or bundle_match is None
+            or bundle_match.group(1) != bundle_name
+        ):
+            return None
+        provision_match = re.search(
+            r'"(?:appProvisionType|provisionType)"\s*:\s*"([^"]+)"',
+            output,
+        )
+        version_match = re.search(r'"versionName"\s*:\s*"([^"]+)"', output)
+        return {
+            "bundle_name": bundle_name,
+            "provision_type": provision_match.group(1) if provision_match else "",
+            "version_name": version_match.group(1) if version_match else "",
+        }
+
     def install(self, hap_path: str) -> bool:
         """使用 hdc install 安装 hap 包到已连接设备。
 
@@ -332,7 +418,7 @@ class Installer:
             RuntimeError: hdc install 执行失败时抛出。
         """
         self._ensure_server()
-        cmd = [self._hdc, "install", hap_path]
+        cmd = self._device_command("install", "-r", hap_path)
         result = run_process(
             cmd,
             capture_output=True,
@@ -343,7 +429,12 @@ class Installer:
         output = (result.stdout or "") + (result.stderr or "")
         # hdc install 即使失败也可能返回 0，仅按真实失败标记识别：
         # 非零退出码、[Fail] 状态行、INSTALL_FAILED_ 前缀或明确的 error: 行。
-        failed = result.returncode != 0 or bool(_FATAL_INSTALL_MARKERS.search(output))
+        succeeded = "install bundle successfully" in output.lower()
+        failed = (
+            result.returncode != 0
+            or bool(_FATAL_INSTALL_MARKERS.search(output))
+            or not succeeded
+        )
         if failed:
             raise RuntimeError(
                 f"hdc install 失败 (code={result.returncode}): {output.strip()}"

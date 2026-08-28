@@ -6,6 +6,12 @@
 
 ### Added
 
+- 新增面向 Agent 的 `auth`、`devices list`、`sign`、`install`、`deploy` CLI
+  子命令；支持单行 JSON stdout、stderr 日志、明确退出码与输入校验。
+- CLI 支持显式 HDC `--serial`、真机/模拟器候选标记、签名与安装分离，以及安装后
+  `bm dump` 校验；Token 可跨目标设备复用，Profile 缓存按 UDID 隔离。
+- CLI 默认状态目录改为跨平台用户主目录 `~/.hapsign`，Windows 对应
+  `%USERPROFILE%\.hapsign`，不再受 Agent 当前工作目录影响。
 - macOS 支持：按平台解析 DevEco JBR / hap-sign-tool / hdc 路径，可用 `hapsign` 命令行签名安装。
 - 可安装的 `hapsign` 命令和标准 Python 项目元数据。
 - Ruff、pytest、覆盖率、pre-commit 和 Windows CI 配置。

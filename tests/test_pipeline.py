@@ -21,6 +21,15 @@ from hapsign.pipeline import SignPipeline
 from hapsign.token import secure_token_cache
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_state_dir(tmp_path, monkeypatch) -> None:
+    """禁止无 state-dir 的测试接触真实用户主目录。"""
+    monkeypatch.setattr(
+        "hapsign.pipeline.default_state_dir",
+        lambda: str(tmp_path / "signing_files"),
+    )
+
+
 def _pipeline(tmp_path, monkeypatch) -> SignPipeline:
     monkeypatch.chdir(tmp_path)
     return SignPipeline(
@@ -239,6 +248,67 @@ def test_token_cache_migrates_legacy_plaintext(tmp_path, monkeypatch) -> None:
     assert pipeline._load_token_cache()["access_token"] == "access"
 
 
+def test_token_cache_plaintext_is_current_format_on_non_windows(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(secure_token_cache.os, "name", "posix")
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    cache_path = tmp_path / "signing_files" / ".token_cache.json"
+    cache_path.parent.mkdir()
+    cache_path.write_text(
+        json.dumps(
+            {
+                "creation_date": date.today().isoformat(),
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "user_id": "user",
+                "jwt_token": "jwt",
+            }
+        ),
+        encoding="utf-8",
+    )
+    rewrite = Mock()
+    monkeypatch.setattr(pipeline, "_write_token_cache", rewrite)
+
+    assert pipeline._load_token_cache()["access_token"] == "access"
+    rewrite.assert_not_called()
+
+
+def test_authenticate_reuses_token_without_browser_or_device(
+    tmp_path, monkeypatch
+) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    cache = {
+        "creation_date": date.today().isoformat(),
+        "access_token": "access",
+        "refresh_token": "refresh",
+        "user_id": "user",
+        "jwt_token": "jwt",
+    }
+    monkeypatch.setattr(pipeline, "_load_token_cache", Mock(return_value=cache))
+    init_client = Mock()
+    monkeypatch.setattr(pipeline, "_init_client_from_cache", init_client)
+    monkeypatch.setattr(
+        pipeline,
+        "_step_login",
+        Mock(side_effect=AssertionError("browser should not open")),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_step_check_device",
+        Mock(side_effect=AssertionError("device should not be queried")),
+    )
+
+    result = pipeline.authenticate()
+
+    assert result == {
+        "authenticated": True,
+        "from_cache": True,
+        "creation_date": date.today().isoformat(),
+    }
+    init_client.assert_called_once_with(cache)
+
+
 def test_token_cache_bad_base64_falls_back_to_relogin(tmp_path, monkeypatch) -> None:
     pipeline = _pipeline(tmp_path, monkeypatch)
     cache_path = tmp_path / "signing_files" / ".token_cache.json"
@@ -308,6 +378,8 @@ def test_pipeline_failure_logs_redacted_exception(
     assert result is False
     assert secret not in caplog.text
     assert "tempToken=<redacted>" in caplog.text
+    assert secret not in pipeline.last_error
+    assert "tempToken=<redacted>" in pipeline.last_error
 
 
 def test_token_cache_protect_failure_keeps_old_file(tmp_path, monkeypatch) -> None:
@@ -357,6 +429,29 @@ def test_metadata_does_not_store_keystore_password(tmp_path, monkeypatch) -> Non
 
     metadata = json.loads((tmp_path / "signing" / "metadata.json").read_text("utf-8"))
     assert "keystore_password" not in metadata
+
+
+def test_metadata_for_another_device_is_ignored(tmp_path, monkeypatch) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    paths = {}
+    for suffix in ("p12", "cer", "p7b"):
+        path = tmp_path / "signing" / f"material.{suffix}"
+        path.write_bytes(b"placeholder")
+        paths[suffix] = str(path)
+    pipeline._udid = "B" * 64
+    with open(pipeline._metadata_path, "w", encoding="utf-8") as metadata:
+        json.dump(
+            {
+                "creation_date": date.today().isoformat(),
+                "udid": "A" * 64,
+                "p12_path": paths["p12"],
+                "cer_path": paths["cer"],
+                "p7b_path": paths["p7b"],
+            },
+            metadata,
+        )
+
+    assert pipeline._load_cached_metadata() is None
 
 
 def test_extract_permissions_filters_non_acl_entries(tmp_path, monkeypatch) -> None:
@@ -468,6 +563,72 @@ def test_run_installs_already_signed_hap_directly(tmp_path, monkeypatch) -> None
     pipeline._step_sign_hap.assert_not_called()
 
 
+def test_sign_only_keeps_signed_hap_without_installing(tmp_path, monkeypatch) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    hap = tmp_path / "signed.hap"
+    hap.write_bytes(b"placeholder")
+    values = []
+    pipeline = SignPipeline(
+        hap_path=str(hap),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+        progress_callback=lambda value, label: values.append((value, label)),
+    )
+    monkeypatch.setattr(pipeline_module, "is_hap_signed", lambda _path: True)
+    install = Mock(side_effect=AssertionError("sign must not install"))
+    monkeypatch.setattr(
+        pipeline_module,
+        "Installer",
+        lambda **_kwargs: SimpleNamespace(
+            get_udid=lambda: "A" * 64,
+            install=install,
+            close=Mock(),
+        ),
+    )
+
+    assert pipeline.run() is True
+    assert pipeline.signed_hap_path == str(hap)
+    assert values[-1] == (100, "签名完成")
+    install.assert_not_called()
+
+
+def test_unsigned_sign_only_omits_install_step(tmp_path, monkeypatch) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    pipeline = SignPipeline(
+        hap_path=str(tmp_path / "unsigned.hap"),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+    )
+    monkeypatch.setattr(pipeline_module, "is_hap_signed", lambda _path: False)
+    monkeypatch.setattr(pipeline, "_step_check_device", Mock())
+    monkeypatch.setattr(
+        pipeline,
+        "_load_cached_metadata",
+        Mock(
+            return_value={
+                "p12_path": "key.p12",
+                "cer_path": "cert.cer",
+                "p7b_path": "profile.p7b",
+            }
+        ),
+    )
+    labels = []
+
+    def _capture_steps(steps):
+        labels.extend(label for label, _step in steps)
+        return True
+
+    monkeypatch.setattr(pipeline, "_run_steps", _capture_steps)
+
+    assert pipeline._run_pipeline() is True
+    assert labels == ["检测设备连接", "签名 hap"]
+    assert "安装 hap 到设备" not in labels
+
+
 def test_run_unsigned_hap_does_not_take_signed_shortcut(tmp_path, monkeypatch) -> None:
     from hapsign import pipeline as pipeline_module
 
@@ -566,6 +727,7 @@ def test_pipeline_runtime_state_initialized(tmp_path, monkeypatch) -> None:
     assert pipeline._csr_path == ""
     assert pipeline._csr_content == ""
     assert pipeline._signed_hap_path == ""
+    assert pipeline.last_error == ""
 
 
 def test_force_refresh_signing_decision_does_not_leak(tmp_path, monkeypatch) -> None:

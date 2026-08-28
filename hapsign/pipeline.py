@@ -1,9 +1,9 @@
 """登录、token 交换、签名材料申请、HAP 签名和安装的全流程编排。
 
 双重缓存策略（同一天内复用，避免反复登录和申请）：
-  1. Token 缓存：``signing_files/.token_cache.json`` 存储当天登录的 token 信息，
+  1. Token 缓存：``~/.hapsign/.token_cache.json`` 存储当天登录的 token 信息，
      同账号同一天内复用，不重新登录。
-  2. 签名文件缓存：``signing_files/{bundle_name}/metadata.json`` 存储当天申请的
+  2. 签名文件缓存：``~/.hapsign/{bundle_name}/metadata.json`` 存储当天申请的
      签名文件路径，同一天内复用，不重新申请证书/设备/Profile。
 
 缓存失效场景：
@@ -21,6 +21,7 @@ import traceback
 import zipfile
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
 from hapsign.api.capability_api import CapabilityAPI
 from hapsign.api.cert_api import CertAPI
@@ -46,8 +47,18 @@ from hapsign.token.token_exchange import TokenExchange
 
 logger = logging.getLogger(__name__)
 
-# 签名文件根目录（相对于项目根）
-SIGNING_FILES_DIR = "signing_files"
+# 默认签名状态目录。Path.home() 在 macOS/Linux 解析为 $HOME，在 Windows
+# 解析为 %USERPROFILE%，因此不会依赖调用命令时的工作目录。
+DEFAULT_STATE_DIR_NAME = ".hapsign"
+
+
+def default_state_dir() -> str:
+    """返回跨平台的默认 Token 与签名材料目录。"""
+    return str((Path.home() / DEFAULT_STATE_DIR_NAME).resolve())
+
+
+# 保留旧常量名，避免外部调用方导入时报错；新代码应调用 default_state_dir()。
+SIGNING_FILES_DIR = default_state_dir()
 SIGNED_HAP_MANIFEST = ".hapsign-signed-haps.json"
 
 
@@ -83,11 +94,14 @@ class SignPipeline:
         keep_signed_hap: bool = True,
         cancel_event: threading.Event | None = None,
         progress_callback: Callable[[int, str], None] | None = None,
+        serial: str | None = None,
+        install_after_sign: bool = True,
     ):
         self.hap_path = hap_path
         self.bundle_name = bundle_name
         self.country = country
         self.device_type = device_type
+        self.serial = serial
         self.enable_capability = enable_capability
         self.force_refresh_token = force_refresh_token
         self.force_refresh_signing = force_refresh_signing
@@ -96,13 +110,22 @@ class SignPipeline:
         self._temporary_signed_dir: tempfile.TemporaryDirectory | None = None
         self.cancel_event = cancel_event
         self.progress_callback = progress_callback
-        self.state_dir = state_dir or SIGNING_FILES_DIR
+        self.state_dir = (
+            os.path.abspath(os.path.expanduser(state_dir))
+            if state_dir
+            else default_state_dir()
+        )
+        self.install_after_sign = install_after_sign
         if work_dir:
-            self.work_dir = work_dir
+            self.work_dir = os.path.abspath(os.path.expanduser(work_dir))
         else:
             self.work_dir = os.path.join(self.state_dir, bundle_name)
-        self.signed_output_dir = signed_output_dir or self.work_dir
-        os.makedirs(self.work_dir, exist_ok=True)
+        self.signed_output_dir = (
+            os.path.abspath(os.path.expanduser(signed_output_dir))
+            if signed_output_dir
+            else self.work_dir
+        )
+        os.makedirs(self.work_dir, mode=0o700, exist_ok=True)
         self.keystore_password = KEYSTORE_PASSWORD
         self._metadata_path = os.path.join(self.work_dir, "metadata.json")
         self._token_cache_path = os.path.join(self.state_dir, ".token_cache.json")
@@ -128,6 +151,7 @@ class SignPipeline:
         self._csr_path = ""
         self._csr_content = ""
         self._signed_hap_path = ""
+        self._last_error = ""
 
     def _check_cancelled(self) -> None:
         raise_if_cancelled(self.cancel_event)
@@ -141,9 +165,9 @@ class SignPipeline:
     def _load_token_cache(self) -> dict | None:
         """加载当天的 token 缓存。
 
-        条件：缓存存在、creation_date 是今天；缓存可能是 DPAPI 加密格式或旧版
-        明文 JSON。明文缓存首次读取时安全迁移为加密格式；解密失败视为无缓存，
-        回退重新登录。
+        条件：缓存存在、creation_date 是今天；缓存可能是 Windows DPAPI 加密格式
+        或非 Windows 平台的 0600 明文 JSON。Windows 上的旧版明文缓存首次读取时
+        安全迁移为加密格式；解密失败视为无缓存，回退重新登录。
         """
         if not os.path.exists(self._token_cache_path):
             return None
@@ -173,7 +197,9 @@ class SignPipeline:
                 cache = json.loads(raw)
             except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
                 return None
-            legacy = True
+            # 非 Windows 平台没有 DPAPI，0600 明文就是当前格式；只有 Windows
+            # 才把明文视为旧格式并迁移，避免 macOS 每次读取都重复写盘和告警。
+            legacy = os.name == "nt"
 
         if not isinstance(cache, dict):
             logger.warning("[cache] token 缓存格式无效，将重新登录")
@@ -288,6 +314,11 @@ class SignPipeline:
             logger.info("[cache] 签名文件创建于 %s，非今日", meta.get("creation_date"))
             return None
 
+        cached_udid = str(meta.get("udid", ""))
+        if self._udid and cached_udid != self._udid:
+            logger.info("[cache] 签名 Profile 属于其他设备，重新申请")
+            return None
+
         for key in ("p12_path", "cer_path", "p7b_path"):
             path = meta.get(key, "")
             if not path or not os.path.exists(path):
@@ -329,7 +360,8 @@ class SignPipeline:
             self._emit_progress(2, "正在准备")
             result = self._run_pipeline()
             if result:
-                self._emit_progress(100, "安装完成")
+                final_label = "安装完成" if self.install_after_sign else "签名完成"
+                self._emit_progress(100, final_label)
             return result
         finally:
             self._close_installer()
@@ -353,9 +385,11 @@ class SignPipeline:
 
         # 已签名包：跳过登录 / 申请 / 签名，直接安装原文件
         if is_hap_signed(self.hap_path):
-            logger.info("[sign] 检测到已签名 HAP，跳过签名流程，直接安装")
+            logger.info("[sign] 检测到已签名 HAP，跳过签名流程")
             self._signed_hap_path = self.hap_path
-            steps = [("安装 hap 到设备", self._step_install)]
+            steps = []
+            if self.install_after_sign:
+                steps.append(("安装 hap 到设备", self._step_install))
             return self._run_steps(steps)
 
         # 强制刷新 token 时连带刷新签名文件（仅本次运行，不改写实例属性）
@@ -378,8 +412,9 @@ class SignPipeline:
             self._p7b_path = signing_cached["p7b_path"]
             steps = [
                 ("签名 hap", self._step_sign_hap),
-                ("安装 hap 到设备", self._step_install),
             ]
+            if self.install_after_sign:
+                steps.append(("安装 hap 到设备", self._step_install))
         else:
             # 需要申请签名文件，先确保有 token
             if not self.force_refresh_token:
@@ -412,8 +447,9 @@ class SignPipeline:
                 ("注册调试设备", self._step_register_device),
                 ("创建调试 Profile", self._step_create_provision),
                 ("签名 hap", self._step_sign_hap),
-                ("安装 hap 到设备", self._step_install),
             ]
+            if self.install_after_sign:
+                steps.append(("安装 hap 到设备", self._step_install))
             if self.enable_capability:
                 steps.insert(0, ("查询应用信息", self._step_get_app_info))
 
@@ -456,6 +492,7 @@ class SignPipeline:
                 except OperationCancelled:
                     raise
                 except Exception as retry_err:
+                    self._last_error = f"{name}: {redact_sensitive_text(retry_err)}"
                     logger.error(
                         "x %s failed after retry: %s",
                         name,
@@ -470,6 +507,7 @@ class SignPipeline:
             except OperationCancelled:
                 raise
             except Exception as e:
+                self._last_error = f"{name}: {redact_sensitive_text(e)}"
                 logger.error("x %s failed: %s", name, redact_sensitive_text(e))
                 logger.debug(
                     "%s 失败调用栈:\n%s",
@@ -511,6 +549,48 @@ class SignPipeline:
 
         # 保存 token 缓存，供同一天内复用
         self._save_token_cache()
+
+    def authenticate(self, force_refresh: bool = False) -> dict[str, object]:
+        """确保账号认证缓存可用，不执行设备检测、签名或安装。"""
+        if force_refresh:
+            self._clear_token_cache()
+        cache = self._load_token_cache()
+        if cache is not None:
+            self._init_client_from_cache(cache)
+            return {
+                "authenticated": True,
+                "from_cache": True,
+                "creation_date": cache.get("creation_date", ""),
+            }
+
+        self._step_login()
+        self._step_exchange_token()
+        return {
+            "authenticated": True,
+            "from_cache": False,
+            "creation_date": date.today().isoformat(),
+        }
+
+    def auth_status(self) -> dict[str, object]:
+        """返回不含凭据内容的本地认证缓存状态。"""
+        cache = self._load_token_cache()
+        return {
+            "authenticated": cache is not None,
+            "cached": cache is not None,
+            "creation_date": cache.get("creation_date", "") if cache else "",
+            "cache_path": os.path.abspath(self._token_cache_path),
+            "online_verified": False,
+        }
+
+    @property
+    def signed_hap_path(self) -> str:
+        """返回本次运行选择或生成的签名 HAP 路径。"""
+        return self._signed_hap_path
+
+    @property
+    def last_error(self) -> str:
+        """返回适合 CLI 展示的最近一次脱敏流程错误。"""
+        return self._last_error
 
     def _step_get_app_info(self) -> None:
         """查询应用简要信息，获取 appId 和 projectId。
@@ -849,7 +929,7 @@ class SignPipeline:
         self._get_installer().install(self._signed_hap_path)
 
     def _step_check_device(self) -> None:
-        """确认有且仅有一台已授权、可通过 HDC 访问的设备。"""
+        """读取显式目标或 HDC 默认目标的 UDID，确认设备可访问。"""
         self._udid = self._get_installer().get_udid()
         logger.info("已检测到可用设备（UDID 尾号 %s）", self._udid[-6:])
 
@@ -857,7 +937,10 @@ class SignPipeline:
 
     def _get_installer(self) -> Installer:
         if self._installer is None:
-            self._installer = Installer(cancel_event=self.cancel_event)
+            self._installer = Installer(
+                cancel_event=self.cancel_event,
+                serial=self.serial,
+            )
         return self._installer
 
     def _cleanup_temporary_signed_hap(self) -> None:

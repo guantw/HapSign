@@ -62,6 +62,87 @@ def test_installer_extracts_udid(monkeypatch) -> None:
     assert installer.Installer().get_udid() == udid
 
 
+def test_installer_targets_explicit_serial(monkeypatch) -> None:
+    udid = "A" * 64
+    run = Mock(return_value=SimpleNamespace(returncode=0, stdout=udid, stderr=""))
+    monkeypatch.setattr(installer, "run_process", run)
+    monkeypatch.setattr(installer.Installer, "_ensure_server", lambda self: None)
+
+    assert installer.Installer(serial="device-serial").get_udid() == udid
+    assert run.call_args.args[0][:3] == [
+        installer.config.HDC_PATH,
+        "-t",
+        "device-serial",
+    ]
+
+
+def test_installer_lists_agent_friendly_targets(monkeypatch) -> None:
+    result = SimpleNamespace(
+        returncode=0,
+        stdout=(
+            "127.0.0.1:5555\t\tTCP\tConnected\tlocalhost\n"
+            "5XQ0225613000233\t\tUSB\tConnected\tlocalhost\n"
+            "offline-device\t\tUSB\tOffline\tlocalhost\n"
+        ),
+        stderr="",
+    )
+    run = Mock(return_value=result)
+    monkeypatch.setattr(installer, "run_process", run)
+    monkeypatch.setattr(installer.Installer, "_ensure_server", lambda self: None)
+
+    targets = installer.Installer().list_targets(connected_only=True)
+
+    assert [target["serial"] for target in targets] == [
+        "127.0.0.1:5555",
+        "5XQ0225613000233",
+    ]
+    assert targets[0]["likely_emulator"] is True
+    assert targets[0]["physical_candidate"] is False
+    assert targets[1]["likely_emulator"] is False
+    assert targets[1]["physical_candidate"] is True
+    assert targets[1]["localhost"] is False
+    assert run.call_args.args[0] == [
+        installer.config.HDC_PATH,
+        "list",
+        "targets",
+        "-v",
+    ]
+
+
+def test_installer_inspects_bundle_on_explicit_serial(monkeypatch) -> None:
+    result = SimpleNamespace(
+        returncode=0,
+        stdout=(
+            '{"bundleName":"com.example.app","appProvisionType":"debug",'
+            '"versionName":"1.2.3"}'
+        ),
+        stderr="",
+    )
+    run = Mock(return_value=result)
+    monkeypatch.setattr(installer, "run_process", run)
+    monkeypatch.setattr(installer.Installer, "_ensure_server", lambda self: None)
+
+    bundle = installer.Installer(serial="device-serial").inspect_bundle(
+        "com.example.app"
+    )
+
+    assert bundle == {
+        "bundle_name": "com.example.app",
+        "provision_type": "debug",
+        "version_name": "1.2.3",
+    }
+    assert run.call_args.args[0] == [
+        installer.config.HDC_PATH,
+        "-t",
+        "device-serial",
+        "shell",
+        "bm",
+        "dump",
+        "-n",
+        "com.example.app",
+    ]
+
+
 def test_installer_raises_on_fail_marker(monkeypatch) -> None:
     # rc=0 但输出含 [Fail] 状态行 → 判定失败
     result = SimpleNamespace(
@@ -117,6 +198,36 @@ def test_installer_raises_on_nonzero_exit(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="hdc install"):
         installer.Installer().install("app.hap")
+
+
+def test_installer_requires_success_text(monkeypatch) -> None:
+    result = SimpleNamespace(returncode=0, stdout="transfer finished", stderr="")
+    monkeypatch.setattr(installer, "run_process", Mock(return_value=result))
+    monkeypatch.setattr(installer.Installer, "_ensure_server", lambda self: None)
+
+    with pytest.raises(RuntimeError, match="hdc install"):
+        installer.Installer().install("app.hap")
+
+
+def test_installer_uses_serial_and_replace(monkeypatch) -> None:
+    result = SimpleNamespace(
+        returncode=0,
+        stdout="install bundle successfully",
+        stderr="",
+    )
+    run = Mock(return_value=result)
+    monkeypatch.setattr(installer, "run_process", run)
+    monkeypatch.setattr(installer.Installer, "_ensure_server", lambda self: None)
+
+    assert installer.Installer(serial="device-serial").install("app.hap") is True
+    assert run.call_args.args[0] == [
+        installer.config.HDC_PATH,
+        "-t",
+        "device-serial",
+        "install",
+        "-r",
+        "app.hap",
+    ]
 
 
 def test_installer_accepts_success_with_error_in_path(monkeypatch) -> None:
