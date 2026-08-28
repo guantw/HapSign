@@ -70,7 +70,7 @@ def test_token_cache_round_trip(tmp_path, monkeypatch) -> None:
         jwt_token="jwt",
     )
 
-    pipeline._save_token_cache()
+    assert pipeline._save_token_cache() is True
 
     assert pipeline._load_token_cache()["access_token"] == "access"
     assert not (tmp_path / "signing_files" / ".token_cache.json.tmp").exists()
@@ -92,7 +92,7 @@ def test_token_cache_write_failure_keeps_old_file(tmp_path, monkeypatch) -> None
 
     monkeypatch.setattr("hapsign.pipeline.json.dumps", _broken_dumps)
 
-    pipeline._save_token_cache()
+    assert pipeline._save_token_cache() is False
 
     assert cache_path.read_text(encoding="utf-8") == '{"old": true}'
     assert not (tmp_path / "signing_files" / ".token_cache.json.tmp").exists()
@@ -114,7 +114,7 @@ def test_token_cache_replace_failure_keeps_old_file(tmp_path, monkeypatch) -> No
 
     monkeypatch.setattr("hapsign.pipeline.os.replace", _broken_replace)
 
-    pipeline._save_token_cache()
+    assert pipeline._save_token_cache() is False
 
     assert cache_path.read_text(encoding="utf-8") == '{"old": true}'
     assert not (tmp_path / "signing_files" / ".token_cache.json.tmp").exists()
@@ -307,6 +307,16 @@ def test_authenticate_reuses_token_without_browser_or_device(
         "creation_date": date.today().isoformat(),
     }
     init_client.assert_called_once_with(cache)
+
+
+def test_authenticate_fails_when_token_cache_write_fails(tmp_path, monkeypatch) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    monkeypatch.setattr(pipeline, "_load_token_cache", Mock(return_value=None))
+    monkeypatch.setattr(pipeline, "_step_login", Mock())
+    monkeypatch.setattr(pipeline, "_step_exchange_token", Mock(return_value=False))
+
+    with pytest.raises(RuntimeError, match="Token 缓存写入失败"):
+        pipeline.authenticate()
 
 
 def test_token_cache_bad_base64_falls_back_to_relogin(tmp_path, monkeypatch) -> None:

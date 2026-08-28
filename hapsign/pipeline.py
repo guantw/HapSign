@@ -219,10 +219,10 @@ class SignPipeline:
             self._write_token_cache(cache)
         return cache
 
-    def _save_token_cache(self) -> None:
+    def _save_token_cache(self) -> bool:
         """保存当前 token 信息到缓存文件。"""
         if self._token_info is None:
-            return
+            return False
         cache = {
             "creation_date": date.today().isoformat(),
             "access_token": self._token_info.access_token,
@@ -233,9 +233,9 @@ class SignPipeline:
             "real_name": self._token_info.real_name,
             "jwt_token": self._token_info.jwt_token,
         }
-        self._write_token_cache(cache)
+        return self._write_token_cache(cache)
 
-    def _write_token_cache(self, cache: dict) -> None:
+    def _write_token_cache(self, cache: dict) -> bool:
         """把 token 缓存写入磁盘（DPAPI 加密；原子替换，失败保留原缓存）。"""
         os.makedirs(self.state_dir, exist_ok=True)
         tmp_path = self._token_cache_path + ".tmp"
@@ -262,8 +262,9 @@ class SignPipeline:
                 "保存 token 缓存失败，保留原缓存: %s",
                 redact_sensitive_text(exc),
             )
-            return
+            return False
         logger.info("[cache] token 缓存已保存: %s", self._token_cache_path)
+        return True
 
     def _init_client_from_cache(self, cache: dict) -> None:
         """从缓存数据初始化 API 客户端。"""
@@ -528,7 +529,7 @@ class SignPipeline:
         )
         self._temp_token = login.login(self.country)
 
-    def _step_exchange_token(self) -> None:
+    def _step_exchange_token(self) -> bool:
         """tempToken -> jwtToken -> accessToken，初始化 API 客户端，保存 token 缓存。"""
         jwt_token = self._token_exchange.exchange_temp_token(
             self._temp_token, self.country
@@ -548,7 +549,7 @@ class SignPipeline:
         self._capability_api = CapabilityAPI(self._client)
 
         # 保存 token 缓存，供同一天内复用
-        self._save_token_cache()
+        return self._save_token_cache()
 
     def authenticate(self, force_refresh: bool = False) -> dict[str, object]:
         """确保账号认证缓存可用，不执行设备检测、签名或安装。"""
@@ -564,7 +565,8 @@ class SignPipeline:
             }
 
         self._step_login()
-        self._step_exchange_token()
+        if not self._step_exchange_token():
+            raise RuntimeError("认证成功，但 Token 缓存写入失败")
         return {
             "authenticated": True,
             "from_cache": False,

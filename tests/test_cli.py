@@ -38,12 +38,6 @@ def test_detect_bundle_name_requires_bundle_name(tmp_path) -> None:
         cli.detect_bundle_name(str(hap_path))
 
 
-def test_legacy_hap_invocation_maps_to_deploy() -> None:
-    assert cli._normalize_legacy_args(
-        ["--hap", "app.hap", "--serial", "device-serial"]
-    ) == ["deploy", "--hap", "app.hap", "--serial", "device-serial"]
-
-
 def test_parser_uses_home_state_dir_by_default(monkeypatch, tmp_path) -> None:
     expected = str(tmp_path / ".hapsign")
     monkeypatch.setattr(cli, "default_state_dir", lambda: expected)
@@ -245,7 +239,10 @@ def test_auth_login_reports_cache_reuse(monkeypatch, tmp_path, capsys) -> None:
             }
 
         def auth_status(self):
-            return {"cache_path": str(cache_path)}
+            return {
+                "authenticated": True,
+                "cache_path": str(cache_path),
+            }
 
     monkeypatch.setattr(cli, "SignPipeline", FakePipeline)
 
@@ -254,6 +251,38 @@ def test_auth_login_reports_cache_reuse(monkeypatch, tmp_path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["from_cache"] is True
+
+
+def test_auth_login_fails_when_cache_was_not_persisted(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    cache_path = tmp_path / ".token_cache.json"
+
+    class FakePipeline:
+        def __init__(self, **_kwargs):
+            pass
+
+        def authenticate(self, force_refresh=False):
+            return {
+                "authenticated": True,
+                "from_cache": False,
+                "creation_date": "2026-08-28",
+            }
+
+        def auth_status(self):
+            return {
+                "authenticated": False,
+                "cache_path": str(cache_path),
+            }
+
+    monkeypatch.setattr(cli, "SignPipeline", FakePipeline)
+
+    assert cli.main(["auth", "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "operation_failed"
+    assert "Token 缓存" in payload["error"]["message"]
 
 
 def test_devices_list_json(monkeypatch, capsys) -> None:
@@ -320,6 +349,26 @@ def test_json_argument_error_has_stable_exit_code(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
     assert payload["command"] == "sign"
+    assert payload["error"]["type"] == "invalid_arguments"
+    assert "--serial" in payload["error"]["message"]
+
+
+def test_legacy_hap_invocation_is_rejected(capsys) -> None:
+    assert cli.main(["--hap", "app.hap", "--serial", "device-serial", "--json"]) == 2
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["command"] == "unknown"
+    assert payload["error"]["type"] == "invalid_arguments"
+
+
+@pytest.mark.parametrize("command", ["sign", "install", "deploy"])
+def test_empty_serial_is_rejected_as_invalid_arguments(command, capsys) -> None:
+    assert cli.main([command, "--hap", "app.hap", "--serial", " ", "--json"]) == 2
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["command"] == command
     assert payload["error"]["type"] == "invalid_arguments"
     assert "--serial" in payload["error"]["message"]
 

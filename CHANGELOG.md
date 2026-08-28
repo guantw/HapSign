@@ -54,8 +54,17 @@
   哈希、许可材料及 libusb 对应源码。DevEco 工具链只保留为显式排障回退。
 - 便携构建在 ZIP 旁自动生成标准 `.sha256` 校验文件，降低发布时手工抄录哈希出错的风险。
 
+### Changed
+
+- CLI 现在必须显式使用 `auth`、`devices`、`sign`、`install` 或 `deploy`
+  子命令，并为设备相关命令传入非空 `--serial`；旧的 `hapsign --hap ...`
+  调用方式不再兼容。
+
 ### Fixed
 
+- Agent CLI 会拒绝空白 HDC serial，避免退回隐式设备选择；`auth` 仅在 Token
+  缓存成功落盘后返回成功；`devices list` 不再把退出码为 0 的 HDC `[Fail]`
+  输出误报为空设备列表。
 - CLI 不再把缺少 HDC 可执行文件归类为输入错误；`devices`、`install` 等运行时
   HDC 失败现在返回 `operation_failed` 和退出码 1。
 - HTTP 客户端正确发送 `User-Agent` / `Accept-Language` 请求头。
