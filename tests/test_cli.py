@@ -118,6 +118,43 @@ def test_deploy_json_returns_pipeline_result(
         assert payload["error"]["message"] == ("检测设备连接: device unavailable")
 
 
+def test_failure_json_redacts_pipeline_device_udid(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    hap_path = tmp_path / "example.hap"
+    _write_hap(hap_path)
+    device_udid = "A" * 64
+
+    class FakePipeline:
+        def __init__(self, **_kwargs):
+            self.last_error = f"Device not found in list: {device_udid}"
+
+        def run(self):
+            return False
+
+    monkeypatch.setattr(cli, "SignPipeline", FakePipeline)
+    monkeypatch.setattr(cli, "is_hap_signed", lambda _path: False)
+
+    assert (
+        cli.main(
+            [
+                "sign",
+                "--hap",
+                str(hap_path),
+                "--serial",
+                "device-serial",
+                "--json",
+            ]
+        )
+        == 1
+    )
+
+    stdout = capsys.readouterr().out
+    assert device_udid not in stdout
+    payload = json.loads(stdout)
+    assert payload["error"]["message"] == ("Device not found in list: <redacted-udid>")
+
+
 def test_sign_json_does_not_install(monkeypatch, tmp_path, capsys) -> None:
     hap_path = tmp_path / "unsigned.hap"
     signed_path = tmp_path / "unsigned_signed.hap"
@@ -255,6 +292,28 @@ def test_devices_list_json(monkeypatch, capsys) -> None:
     assert payload["targets"] == targets
 
 
+def test_devices_missing_hdc_is_operation_failure(monkeypatch, capsys) -> None:
+    class MissingHdcInstaller:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def list_targets(self, connected_only=False):
+            raise FileNotFoundError(2, "No such file or directory", "hdc")
+
+    monkeypatch.setattr(cli, "Installer", MissingHdcInstaller)
+
+    assert cli.main(["devices", "list", "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["command"] == "devices"
+    assert payload["error"]["type"] == "operation_failed"
+    assert "hdc" in payload["error"]["message"]
+
+
 def test_json_argument_error_has_stable_exit_code(capsys) -> None:
     assert cli.main(["sign", "--hap", "app.hap", "--json"]) == 2
 
@@ -338,6 +397,49 @@ def test_install_signed_hap_with_explicit_serial(monkeypatch, tmp_path, capsys) 
         ("install", str(hap_path)),
         ("inspect", "com.example.app"),
     ]
+
+
+def test_install_missing_hdc_is_operation_failure(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    hap_path = tmp_path / "signed.hap"
+    _write_hap(hap_path)
+
+    class MissingHdcInstaller:
+        def __init__(self, serial=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def install(self, path):
+            raise FileNotFoundError(2, "No such file or directory", "hdc")
+
+    monkeypatch.setattr(cli, "Installer", MissingHdcInstaller)
+    monkeypatch.setattr(cli, "is_hap_signed", lambda _path: True)
+
+    assert (
+        cli.main(
+            [
+                "install",
+                "--hap",
+                str(hap_path),
+                "--serial",
+                "device-serial",
+                "--json",
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["command"] == "install"
+    assert payload["error"]["type"] == "operation_failed"
+    assert "hdc" in payload["error"]["message"]
 
 
 def test_install_rejects_unsigned_hap(monkeypatch, tmp_path, capsys) -> None:

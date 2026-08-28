@@ -346,11 +346,12 @@ def _failure(
     *,
     error_type: str = "operation_failed",
 ) -> None:
+    safe_message = redact_sensitive_text(message)
     _emit(
         {
             "ok": False,
             "command": command,
-            "error": {"type": error_type, "message": message},
+            "error": {"type": error_type, "message": safe_message},
         },
         json_output,
     )
@@ -563,7 +564,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except OperationCancelled:
         _failure(args.command, "操作已取消", args.json_output, error_type="cancelled")
         return EXIT_CANCELLED
-    except (ValueError, FileNotFoundError, zipfile.BadZipFile) as exc:
+    except (ValueError, zipfile.BadZipFile) as exc:
         message = str(redact_sensitive_text(exc))
         _failure(args.command, message, args.json_output, error_type="invalid_input")
         return EXIT_USAGE
