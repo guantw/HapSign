@@ -204,9 +204,10 @@ HapSign/
 └── signed_haps/                 # 最新一个签名 HAP，与材料目录设置无关
 ```
 
-因此便携目录必须可写。源码 GUI 默认使用项目根目录，源码 CLI 默认使用当前工作
-目录下的 `signing_files/<bundle_name>/`。可以用 `HAPSIGN_DATA_DIR` 覆盖桌面版
-数据根目录，CLI 则可使用 `--work-dir`。已签名 HAP 会跳过签名流程，因此不会
+因此便携目录必须可写。源码 GUI 默认使用项目根目录，源码 CLI 默认使用用户主目录
+下的 `~/.hapsign/<bundle_name>/`。可以用 `HAPSIGN_DATA_DIR` 覆盖桌面版
+数据根目录，CLI 则可使用 `--state-dir`、`--work-dir` 和 `--output-dir`。已签名
+HAP 会跳过签名流程，因此不会
 产生新的 `.p12`、`.cer`、`.p7b` 或签名后 HAP。
 
 GUI 设置也可选择用户 `AppData Local` 或自定义签名目录。程序目录下的

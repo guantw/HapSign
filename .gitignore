@@ -16,6 +16,7 @@ htmlcov/
 
 # 签名产物（证书、密钥、Profile、签名后的 hap）
 signing_files/
+.hapsign/
 signed_haps/
 logs/
 hapsign-config.json

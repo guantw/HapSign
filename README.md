@@ -131,6 +131,9 @@ set HAPSIGN_PYTHON=C:\path\to\your\python.exe
 $env:HAPSIGN_PYTHON = "C:\path\to\your\python.exe"
 ```
 
+拖拽脚本还需要明确的 HDC 目标序列号，可设 `HAPSIGN_SERIAL`，也可把序列号作为
+第二个参数传入。运行 `hapsign devices list` 可以查看候选设备。
+
 ## 使用
 
 ### 方式一：桌面应用（推荐）
@@ -164,18 +167,39 @@ hapsign-app
 
 ### 方式二：bat 拖拽
 
-将 `.hap` 文件直接拖到 `sign_install.bat` 上，自动完成签名+安装。
+先设置 `HAPSIGN_SERIAL`，再将 `.hap` 文件拖到 `sign_install.bat` 上；或从 CMD
+显式传入 HAP 和设备序列号：
+
+```bat
+set HAPSIGN_SERIAL=5XQ0225613000233
+sign_install.bat path\to\app-unsigned.hap 5XQ0225613000233
+```
 
 ### 方式三：命令行（Windows / macOS）
 
 ```bash
-hapsign --hap path/to/app-unsigned.hap
-hapsign --hap path/to/app-signed.hap   # 已签名则跳过签名，直接安装
+hapsign devices list --connected-only --json
+hapsign auth status --json
+hapsign auth --json
+hapsign sign --hap path/to/app-unsigned.hap --serial <serial> --json
+hapsign install --hap path/to/app-signed.hap --serial <serial> --json
+hapsign deploy --hap path/to/app-unsigned.hap --serial <serial> --json
 ```
 
-包名会自动从 hap 内的 `module.json` 提取，无需手动指定。
-若 HAP 已包含签名块（Hap Signing Block），会跳过登录与签名，直接安装原文件。
-源码目录中仍可使用 `python main.py --hap ...`。
+`sign` 只签名并返回签名 HAP 的绝对路径；`install` 只接受已有 Hap Signing Block
+的 HAP；`deploy` 端到端签名并安装，输入已经签名时会直接安装。包名默认从 HAP
+里的 `module.json` 提取。源码目录中可用 `python3 main.py <command> ...`。
+
+所有执行命令都支持 `--json`。此模式下 stdout 只输出单行 JSON，日志写到 stderr，
+且不会输出 Token、密码或 UDID。Agent 应先从 `devices list` 中选择
+`connected=true` 的目标，优先选择 `physical_candidate=true` 的 USB 真机，再把其
+`serial` 原样传给后续命令。`serial` 是 HDC 连接标识，不是签名 Profile 中的 UDID。
+
+`auth` 可以单独调用并持久化当天 Token。同一份 Token 缓存不绑定目标设备，在同一
+台运行 HapSign 的电脑上可继续给不同 HarmonyOS 手机、平板或 PC 目标签名；每台
+目标设备的 Profile 仍绑定自己的 UDID，切换设备会重新申请 Profile。Token 不会在
+多台运行 HapSign 的电脑之间自动同步，也不建议手工复制缓存。`auth status` 只检查
+本地当日缓存，因此 JSON 中 `online_verified` 固定为 `false`。
 
 ### 构建便携版
 
@@ -215,30 +239,47 @@ python scripts/build_portable.py --keep-bundled-browser
 > [开源发布门禁](docs/OPEN_SOURCE_RELEASE.md) 完成真实设备安装回归。
 > `--allow-deveco-toolchain` 只用于排障回退，其产物不得冒充锁定的公开构建。
 
-### 完整参数
+### Agent CLI 接口
 
 ```
-hapsign --hap <hap路径> [选项]
+hapsign auth [login|status] [--refresh] [--state-dir DIR] [--json]
+hapsign devices [list] [--connected-only] [--json]
+hapsign sign --hap HAP --serial SERIAL [签名选项] [--json]
+hapsign install --hap SIGNED_HAP --serial SERIAL [--bundle-name NAME] [--json]
+hapsign deploy --hap HAP --serial SERIAL [签名选项] [--json]
 
-选项:
-  --hap               hap 文件路径（必填；已签名则直接安装）
-  --bundle-name       应用包名（不传则从 hap 内自动提取）
-  --country           国家码，默认 CN
-  --device-type       设备类型码，默认 4
-  --work-dir          签名文件存储目录，默认 signing_files/{bundle_name}/
-  --enable-capability 使用 Real Profile（APL=system_basic），用于需要高权限的应用
-  --refresh-token     强制刷新 token 缓存（重新登录，连带刷新签名文件）
-  --refresh-signing   强制刷新签名文件缓存（重新申请，不重新登录）
-  -v, --verbose       显示调试日志
-  --version           显示版本号
+sign / deploy 签名选项:
+  --bundle-name NAME   覆盖 HAP 中的包名
+  --country CODE       华为账号国家码，默认 CN
+  --device-type TYPE   签名平台注册的设备类型码，默认 4
+  --state-dir DIR      Token 与默认签名材料根目录，默认 ~/.hapsign
+  --work-dir DIR       当前 bundle 签名材料目录，默认 <state-dir>/<bundle>
+  --output-dir DIR     签名 HAP 输出目录，默认与 work-dir 相同
+  --browser MODE       system、system_controlled 或 playwright
+  --enable-capability  使用 Real Profile（APL=system_basic）
+  --refresh-token      强制浏览器认证，同时刷新签名材料
+  --refresh-signing    只重新申请证书/Profile，复用有效 Token
+  -v, --verbose        将 DEBUG 日志写到 stderr
 
 设备类型码:
-  4  手机/平板（默认）
+  4  手机/平板/2in1（默认）
   2  穿戴设备
   8  智慧屏
   9  路由器
   1  轻量级穿戴设备
+
+退出码:
+  0    命令成功
+  1    认证、签名、HDC 或安装运行失败
+  2    参数或输入 HAP 无效
+  130  用户取消
 ```
+
+成功 JSON 至少包含 `ok=true` 和 `command`。`sign` / `deploy` 还包含 `input_hap`、
+`signed_hap`、`bundle_name`、`serial`、`input_signed` 和 `installed`；`devices list`
+包含 `count`、`connected_count` 与 `targets`。失败 JSON 使用
+`{"ok":false,"command":"...","error":{"type":"...","message":"..."}}`。
+完整、随版本同步的帮助以 `hapsign --help` 和各子命令 `--help` 为准。
 
 ### 首次运行
 
@@ -251,7 +292,7 @@ hapsign --hap <hap路径> [选项]
 如果应用需要 `system_basic` 级别的 APL，加 `--enable-capability` 参数走 Real Provision 路径：
 
 ```bash
-hapsign --hap app.hap --enable-capability
+hapsign deploy --hap app.hap --serial <serial> --enable-capability
 ```
 
 此模式通过 `add.real.provision` API 创建 Real Profile（provisionType=1），对应 DevEco Studio 6.1+ 的 `enableCapability` 路径。需要应用已在 AGC（AppGallery Connect）注册且当前账号有访问权限，否则自动回退到 Test Profile。
@@ -269,8 +310,10 @@ HapSign/
 └── signed_haps/                 # 最新一个签名 HAP（可在设置中关闭）
 ```
 
-源码 CLI 默认保存在启动命令时所在目录的
-`signing_files/<bundle_name>/`；传入 `--work-dir` 可以指定其他目录。
+源码 CLI 默认保存在用户主目录的 `~/.hapsign/<bundle_name>/`；Windows 对应
+`%USERPROFILE%\.hapsign\<bundle_name>\`。该默认值不依赖启动命令时的工作目录。
+传入 `--state-dir`、`--work-dir` 和 `--output-dir` 可以分别指定 Token/默认材料
+根目录、当前 bundle 材料目录和签名 HAP 输出目录。
 程序目录必须可写，不建议把便携版解压到 `Program Files` 等受保护目录。
 桌面版“设置”中还可以改为用户 `AppData Local` 或任意自定义目录。
 
@@ -290,15 +333,17 @@ HapSign/
 
 ## 缓存策略
 
-同一天内不会重复登录或重复申请签名文件：
+同一天内不会重复登录；签名文件只在 bundle 和目标 UDID 都相同时复用：
 
-- **Token 缓存**：`signing_files/.token_cache.json`，当天复用，不重新登录
-- **签名文件缓存**：`signing_files/{bundle_name}/metadata.json`，当天复用，不重新申请证书/设备/Profile
+- **Token 缓存**：`~/.hapsign/.token_cache.json`，当天可跨目标设备复用
+- **签名文件缓存**：`~/.hapsign/{bundle_name}/metadata.json`，当天仅为匹配的
+  bundle 和设备 UDID 复用
 - 跨天自动失效，重新走完整流程
 - Token 失效时自动刷新，刷新失败才回退到重新登录
 
-这些文件包含明文敏感信息，不要上传、分享或放入云同步目录。共享电脑使用完毕后应删除
-`signing_files/`。详细说明见 [SECURITY.md](SECURITY.md)。
+Windows 使用当前用户 DPAPI 加密 Token；macOS/Linux 以权限 `0600` 的明文保存。
+签名材料与缓存都不要上传、分享或放入云同步目录。共享电脑使用完毕后应删除
+`~/.hapsign/`。详细说明见 [SECURITY.md](SECURITY.md)。
 
 ## 限制
 
