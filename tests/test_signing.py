@@ -76,6 +76,15 @@ def test_installer_targets_explicit_serial(monkeypatch) -> None:
     ]
 
 
+def test_installer_does_not_treat_explicit_empty_serial_as_implicit() -> None:
+    assert installer.Installer(serial="")._device_command("shell") == [
+        installer.config.HDC_PATH,
+        "-t",
+        "",
+        "shell",
+    ]
+
+
 def test_installer_lists_agent_friendly_targets(monkeypatch) -> None:
     result = SimpleNamespace(
         returncode=0,
@@ -107,6 +116,19 @@ def test_installer_lists_agent_friendly_targets(monkeypatch) -> None:
         "targets",
         "-v",
     ]
+
+
+def test_installer_rejects_hdc_failure_marker_with_zero_exit(monkeypatch) -> None:
+    result = SimpleNamespace(
+        returncode=0,
+        stdout="[Fail]Connect server failed.\n",
+        stderr="",
+    )
+    monkeypatch.setattr(installer, "run_process", Mock(return_value=result))
+    monkeypatch.setattr(installer.Installer, "_ensure_server", lambda self: None)
+
+    with pytest.raises(RuntimeError, match="hdc list targets"):
+        installer.Installer().list_targets()
 
 
 def test_installer_inspects_bundle_on_explicit_serial(monkeypatch) -> None:

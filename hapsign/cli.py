@@ -68,6 +68,14 @@ def _add_state_option(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _nonempty_serial(value: str) -> str:
+    """规范化显式 HDC serial，禁止空值退回隐式目标选择。"""
+    serial = value.strip()
+    if not serial:
+        raise argparse.ArgumentTypeError("--serial 不能为空")
+    return serial
+
+
 def _add_hap_identity_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hap", required=True, help="HAP 文件的绝对或相对路径")
     parser.add_argument(
@@ -82,6 +90,7 @@ def _add_signing_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--serial",
         required=True,
+        type=_nonempty_serial,
         help="hdc list targets 返回的目标序列号；Profile 将绑定该设备",
     )
     parser.add_argument("--country", default="CN", help="华为账号国家码；默认 CN")
@@ -142,9 +151,6 @@ def build_parser() -> argparse.ArgumentParser:
   hapsign sign --hap app-unsigned.hap --serial <serial> --json
   hapsign install --hap app-signed.hap --serial <serial> --json
   hapsign deploy --hap app-unsigned.hap --serial <serial> --json
-
-兼容旧调用:
-  hapsign --hap app.hap --serial <serial>    等价于 hapsign deploy ...
 
 退出码:
   0    成功
@@ -251,7 +257,12 @@ def build_parser() -> argparse.ArgumentParser:
 """,
     )
     _add_hap_identity_options(install)
-    install.add_argument("--serial", required=True, help="目标 HDC 序列号")
+    install.add_argument(
+        "--serial",
+        required=True,
+        type=_nonempty_serial,
+        help="目标 HDC 序列号",
+    )
     _add_output_options(install)
 
     deploy = subparsers.add_parser(
@@ -270,14 +281,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_signing_options(deploy)
     return parser
-
-
-def _normalize_legacy_args(argv: Sequence[str]) -> list[str]:
-    """把旧 ``hapsign --hap ...`` 调用转换成 ``deploy`` 子命令。"""
-    normalized = list(argv)
-    if "--hap" in normalized and not any(item in COMMANDS for item in normalized[:1]):
-        normalized.insert(0, "deploy")
-    return normalized
 
 
 def _command_from_args(argv: Sequence[str]) -> str:
@@ -411,6 +414,8 @@ def _run_auth(args: argparse.Namespace) -> int:
 
     result = pipeline.authenticate(force_refresh=args.refresh)
     status = pipeline.auth_status()
+    if not status.get("authenticated"):
+        raise RuntimeError("认证成功，但 Token 缓存未能持久化")
     result.update(
         {
             "ok": True,
@@ -541,8 +546,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """运行 CLI 并返回稳定退出码；JSON 模式永不输出凭据。"""
     raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    normalized_args = _normalize_legacy_args(raw_args)
-    parsed = _parse_args(parser, normalized_args)
+    parsed = _parse_args(parser, raw_args)
     if isinstance(parsed, int):
         return parsed
     args = parsed

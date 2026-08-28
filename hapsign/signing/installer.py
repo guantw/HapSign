@@ -31,6 +31,10 @@ _LISTENER_POLL_INTERVAL = 0.25
 _FATAL_INSTALL_MARKERS = re.compile(
     r"(?:\[fail\]|install_failed_|^error:)", re.IGNORECASE | re.MULTILINE
 )
+_FATAL_HDC_OUTPUT = re.compile(
+    r"^\s*(?:\[fail\]|error:|connect server failed\b)",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _listener_pid() -> int | None:
@@ -172,7 +176,7 @@ class Installer:
     def _device_command(self, *args: str) -> list[str]:
         """构建设备命令；指定 serial 时显式选择目标，避免 HDC 隐式歧义。"""
         command = [self._hdc]
-        if self.serial:
+        if self.serial is not None:
             command.extend(["-t", self.serial])
         command.extend(args)
         return command
@@ -343,8 +347,11 @@ class Installer:
             timeout=15,
             cancel_event=self.cancel_event,
         )
-        if result.returncode != 0:
-            output = (result.stderr or result.stdout or "").strip()
+        output = "\n".join(
+            part for part in (result.stdout or "", result.stderr or "") if part
+        )
+        if result.returncode != 0 or _FATAL_HDC_OUTPUT.search(output):
+            output = output.strip()
             raise RuntimeError(f"hdc list targets 失败: {output}")
 
         targets: list[dict[str, object]] = []
