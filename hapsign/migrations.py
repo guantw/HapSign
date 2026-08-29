@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from datetime import date
 from pathlib import Path
 
 from hapsign.diagnostics import is_valid_device_udid
+from hapsign.runtime import application_dir
 
 LEGACY_CACHE_CHANGE_ID = "HAPSIGN-BREAKING-001"
 LEGACY_STATE_CHANGE_ID = "HAPSIGN-BREAKING-003"
@@ -61,9 +63,9 @@ BREAKING_CHANGES: tuple[dict[str, object], ...] = (
             "--state-dir/--output-dir",
             "HAPSIGN_SIGNING_DIR/HAPSIGN_SIGNED_HAPS_DIR",
         ),
-        "summary": "CLI 默认状态和产物改用应用配置目录",
+        "summary": "GUI 与所有 CLI edition 默认共享用户级状态和产物目录",
         "impact": (
-            "PR #5 使用的 ~/.hapsign 及更早版本工作目录中的缓存不会自动搬迁，"
+            "PR #5 使用的 ~/.hapsign 及更早便携版程序目录中的缓存不会自动搬迁，"
             "默认产物位置也会变化；继续签名可能重新生成密钥并替换远端同名调试证书。"
         ),
         "remediation": (
@@ -223,53 +225,58 @@ def legacy_state_warning(
     """检测 PR #5 用户主目录状态是否会被新的应用目录默认值遗漏。"""
     selected_state = state_dir.expanduser().resolve()
     selected_work = work_dir.expanduser().resolve()
-    legacy_state = (
-        legacy_state_dir.expanduser().resolve()
-        if legacy_state_dir is not None
-        else (Path.home() / ".hapsign").resolve()
-    )
-    if selected_state == legacy_state:
-        return None
+    if legacy_state_dir is not None:
+        candidates = [legacy_state_dir.expanduser().resolve()]
+    else:
+        candidates = [(Path.home() / ".hapsign").resolve()]
+        if getattr(sys, "frozen", False):
+            candidates.append((application_dir() / "signing_files").resolve())
+    for legacy_state in candidates:
+        if selected_state == legacy_state:
+            continue
 
-    found: list[str] = []
-    selected_token = selected_state / ".token_cache.json"
-    legacy_token = legacy_state / ".token_cache.json"
-    if not selected_token.is_file() and legacy_token.is_file():
-        found.append("token_cache")
+        found: list[str] = []
+        selected_token = selected_state / ".token_cache.json"
+        legacy_token = legacy_state / ".token_cache.json"
+        if not selected_token.is_file() and legacy_token.is_file():
+            found.append("token_cache")
 
-    selected_metadata = selected_work / "metadata.json"
-    legacy_metadata = legacy_state / bundle_name / "metadata.json"
-    if not selected_metadata.is_file() and legacy_metadata.is_file():
-        try:
-            metadata = json.loads(legacy_metadata.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            metadata = None
-        if (
-            isinstance(metadata, dict)
-            and metadata.get("creation_date") == date.today().isoformat()
-            and metadata.get("bundle_name") == bundle_name
-            and _existing_artifact_paths(legacy_metadata, metadata) is not None
-        ):
-            found.append("signing_materials")
+        selected_metadata = selected_work / "metadata.json"
+        legacy_metadata = legacy_state / bundle_name / "metadata.json"
+        if not selected_metadata.is_file() and legacy_metadata.is_file():
+            try:
+                metadata = json.loads(legacy_metadata.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                metadata = None
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("creation_date") == date.today().isoformat()
+                and metadata.get("bundle_name") == bundle_name
+                and _existing_artifact_paths(legacy_metadata, metadata) is not None
+            ):
+                found.append("signing_materials")
 
-    if not found:
-        return None
-    catalog_entry = next(
-        change for change in BREAKING_CHANGES if change["id"] == LEGACY_STATE_CHANGE_ID
-    )
-    warning = dict(catalog_entry)
-    destructive = "signing_materials" in found
-    warning.update(
-        {
-            "applicable": True,
-            "destructive": destructive,
-            "requires_user_decision": destructive,
-            "legacy_state_dir": str(legacy_state),
-            "selected_state_dir": str(selected_state),
-            "found": found,
-        }
-    )
-    return warning
+        if not found:
+            continue
+        catalog_entry = next(
+            change
+            for change in BREAKING_CHANGES
+            if change["id"] == LEGACY_STATE_CHANGE_ID
+        )
+        warning = dict(catalog_entry)
+        destructive = "signing_materials" in found
+        warning.update(
+            {
+                "applicable": True,
+                "destructive": destructive,
+                "requires_user_decision": destructive,
+                "legacy_state_dir": str(legacy_state),
+                "selected_state_dir": str(selected_state),
+                "found": found,
+            }
+        )
+        return warning
+    return None
 
 
 def migrate_legacy_cache(

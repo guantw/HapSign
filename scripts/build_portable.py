@@ -38,6 +38,18 @@ PYTHON_RUNTIME_DISTRIBUTIONS = (
     "idna",
     "PyInstaller",
 )
+CLI_RUNTIME_DISTRIBUTIONS = (
+    "playwright",
+    "greenlet",
+    "pyee",
+    "typing-extensions",
+    "requests",
+    "urllib3",
+    "certifi",
+    "charset-normalizer",
+    "idna",
+    "PyInstaller",
+)
 # 仅构建期使用的工具：其 bootloader 嵌入冻结产物故保留许可记录，但自身与其传递
 # 依赖并不随便携包分发，因此不计入门禁的“实际冻结闭包”。
 BUILD_TIME_ONLY_DISTRIBUTIONS = ("PyInstaller",)
@@ -235,20 +247,19 @@ def _frozen_runtime_closure(roots: tuple[str, ...]) -> set[str]:
     return closure
 
 
-def _validate_runtime_license_coverage() -> None:
+def _validate_runtime_license_coverage(
+    distributions: tuple[str, ...] | None = None,
+) -> None:
     """门禁：许可清单必须覆盖实际冻结闭包，缺项直接让构建失败。
 
     断言方向为「清单 ⊇ 闭包」：只允许闭包比清单多而报错，不允许按清单反向
     裁剪实际冻结内容，否则构建机与发布环境不一致时差距会被悄悄掩盖。
     """
+    selected = distributions or PYTHON_RUNTIME_DISTRIBUTIONS
     roots = tuple(
-        name
-        for name in PYTHON_RUNTIME_DISTRIBUTIONS
-        if name not in BUILD_TIME_ONLY_DISTRIBUTIONS
+        name for name in selected if name not in BUILD_TIME_ONLY_DISTRIBUTIONS
     )
-    listed = {
-        _normalize_distribution_name(name) for name in PYTHON_RUNTIME_DISTRIBUTIONS
-    }
+    listed = {_normalize_distribution_name(name) for name in selected}
     closure = _frozen_runtime_closure(roots)
     missing = sorted(name for name in closure if name not in listed)
     if missing:
@@ -259,7 +270,10 @@ def _validate_runtime_license_coverage() -> None:
         )
 
 
-def _copy_python_license_files(portable_root: Path) -> None:
+def _copy_python_license_files(
+    portable_root: Path,
+    distributions: tuple[str, ...] | None = None,
+) -> None:
     """复制冻结依赖随 wheel 安装的许可，并记录精确构建版本。"""
     license_root = portable_root / "licenses" / "python"
     license_root.mkdir(parents=True, exist_ok=True)
@@ -271,7 +285,7 @@ def _copy_python_license_files(portable_root: Path) -> None:
         "",
     ]
 
-    for distribution_name in PYTHON_RUNTIME_DISTRIBUTIONS:
+    for distribution_name in distributions or PYTHON_RUNTIME_DISTRIBUTIONS:
         try:
             distribution = metadata.distribution(distribution_name)
         except metadata.PackageNotFoundError as exc:

@@ -12,8 +12,8 @@
   `migrate-cache --profile-type normal|system-basic` 保留缓存。
 - `HAPSIGN-BREAKING-002`：CLI 默认浏览器从普通系统 Profile 改为隔离的
   `system_controlled`；可用 `--browser` 或 `HAPSIGN_BROWSER` 配置。
-- `HAPSIGN-BREAKING-003`：CLI 默认状态/产物从 PR #5 的 `~/.hapsign`（更早版本为
-  进程工作目录）改到应用目录；可用 `--state-dir`、`--output-dir`、
+- `HAPSIGN-BREAKING-003`：GUI 与所有 CLI edition 默认状态/产物从 `~/.hapsign`、
+  进程工作目录或旧便携程序目录改到共享用户级目录；可用 `--state-dir`、`--output-dir`、
   `HAPSIGN_SIGNING_DIR` 和 `HAPSIGN_SIGNED_HAPS_DIR` 恢复原路径；`inspect` 会检测
   可复用的 PR #5 旧状态，并在发现旧签名材料时阻止 agent 静默刷新材料。
 - `HAPSIGN-BREAKING-004`：面向人的 CLI 输出不再作为脚本协议；自动化应使用 `--json`。
@@ -21,6 +21,21 @@
   完整影响、检测方式与整改命令见 [迁移指南](docs/MIGRATIONS.md)。
 
 ### Added
+
+- 新增 HapSign GUI、HapSign CLI External Toolchain、HapSign CLI Portable 三条独立发布
+  产品线；Windows x64 发布全部产品，Linux x64 发布两个 CLI，macOS arm64 只发布
+  External Toolchain，macOS x64 明确不支持。
+- 两个 CLI edition 均以 onedir 形式内置 Python；External Toolchain 自动发现并披露
+  DevEco/SDK/PATH 来源，Portable 使用锁定公共工具链。GUI 内置 Chromium 和工具链。
+- 新增 `build-info --json` 协议、`BUILD_INFO.json`、完整 Release manifest、SHA256SUMS、
+  GitHub provenance attestation，以及 External Toolchain/Portable 两组版本化一键 Prompt。
+- 新增 tag 驱动的 GitHub Release 工作流；`v0.2.0-rc.1` 等 RC 自动发布为 prerelease，
+  缺少任一平台资产会阻止整批发布。
+- 官方 Windows/macOS 二进制明确不使用可信发布者身份或 notarization；macOS arm64 仅
+  保留系统强制的无身份 ad-hoc 签名。Release、manifest、包元数据和 Prompt 均披露该
+  策略，并禁止 Agent 指示用户绕过系统安全机制。
+- GUI 与所有 CLI edition 默认共享平台用户级状态目录，避免发布目录写入 Token、密钥、
+  Profile、日志或签名产物。
 
 - 新增面向 Agent 的 `auth`、`devices list`、`sign`、`install`、`deploy` CLI
   子命令；支持单行 JSON stdout、stderr 日志、明确退出码与输入校验。
@@ -47,7 +62,7 @@
 - 桌面版增加主动设备检测，并在签名安装前强制确认 HDC 设备可用。
 - 运行记录使用统一的轻量滚动条样式，文件卡片支持移除误选 HAP。
 - Windows 便携版声明 Per-Monitor V2 DPI 感知，并使用系统字体和小数缩放。
-- 桌面版签名材料改为保存在程序目录的 `signing_files/`，便于随目录迁移。
+- GUI/CLI 签名材料默认保存在共享用户级 `signing_files/`，各 edition 可安全复用。
 - Windows 下 Java、keytool 和 HDC 使用无控制台窗口方式启动，消除闪窗。
 - HDC server 采用“本次启动、本次关闭”策略，避免任务结束后遗留后台进程，
   同时不终止 DevEco 等工具已有的 HDC 服务。
@@ -58,10 +73,10 @@
 - 桌面任务使用按实际阶段推进的百分比进度条，并支持主动取消。
 - 执行中的登录、网络请求、Java/keytool、签名工具和 HDC 均响应取消信号；
   关闭窗口时可确认中断，清理完成后自动退出。
-- 新增程序目录 JSON 配置、滚动文件日志、日志级别和敏感诊断开关。
-- 桌面设置可在程序目录、用户 AppData Local 和自定义签名目录之间切换，并可
+- 新增用户级 JSON 配置、滚动文件日志、日志级别和敏感诊断开关。
+- 桌面设置可在共享用户目录、旧程序目录和自定义签名目录之间切换，并可
   一键打开签名目录或日志目录。
-- 可选择是否保留签名后的 HAP；默认在程序目录 `signed_haps/` 中仅保留最新
+- 可选择是否保留签名后的 HAP；默认在共享用户目录 `signed_haps/` 中仅保留最新
   一个，新文件发布成功后才删除旧文件，关闭后使用并清理任务临时文件。
 - 便携构建采用带回退开关的保守精简：只排除已知无关的 JCEF/录像组件，并在
   裁剪后强制执行 Chromium、Java、keytool 与 hap-sign-tool 自检。

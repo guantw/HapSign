@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from hapsign.runtime import APP_NAME, application_dir
+from hapsign.runtime import app_data_dir, application_dir
 
 LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
 STORAGE_MODES = {"program", "appdata", "custom"}
@@ -20,7 +19,7 @@ class AppSettings:
     """可持久化的桌面设置。"""
 
     log_level: str = "INFO"
-    signing_storage: str = "program"
+    signing_storage: str = "appdata"
     custom_signing_dir: str = ""
     browser_mode: str = "system_controlled"
     log_sensitive_data: bool = False
@@ -32,19 +31,12 @@ def config_file_path() -> Path:
     override = os.environ.get("HAPSIGN_CONFIG_FILE")
     if override:
         return Path(override).expanduser().resolve()
-    return application_dir() / "hapsign-config.json"
+    return app_data_dir() / "hapsign-config.json"
 
 
 def user_local_data_dir() -> Path:
     """返回当前平台的用户本地应用数据目录。"""
-    system = platform.system()
-    if system == "Windows":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / APP_NAME
-    if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / APP_NAME
-    root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return root / APP_NAME
+    return app_data_dir()
 
 
 def signing_files_dir(settings: AppSettings) -> Path:
@@ -63,8 +55,8 @@ def signing_files_dir(settings: AppSettings) -> Path:
 
 
 def log_directory() -> Path:
-    """日志固定优先写入程序目录，便于便携迁移和问题定位。"""
-    return application_dir() / "logs"
+    """Return the shared per-user log directory."""
+    return app_data_dir() / "logs"
 
 
 def signed_haps_dir() -> Path:
@@ -72,16 +64,16 @@ def signed_haps_dir() -> Path:
     override = os.environ.get("HAPSIGN_SIGNED_HAPS_DIR")
     if override:
         return Path(override).expanduser().resolve()
-    return application_dir() / "signed_haps"
+    return app_data_dir() / "signed_haps"
 
 
 def _validated(data: dict) -> AppSettings:
     log_level = str(data.get("log_level", "INFO")).upper()
     if log_level not in LOG_LEVELS:
         log_level = "INFO"
-    storage = str(data.get("signing_storage", "program")).lower()
+    storage = str(data.get("signing_storage", "appdata")).lower()
     if storage not in STORAGE_MODES:
-        storage = "program"
+        storage = "appdata"
     browser_mode = str(data.get("browser_mode", "system_controlled")).lower()
     if browser_mode not in BROWSER_MODES:
         browser_mode = "system_controlled"

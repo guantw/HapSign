@@ -2,8 +2,13 @@
 
 本文描述 agent 如何在 Windows、Linux 和 macOS 上半自动完成 HAP 调试签名。账号
 密码、验证码和二次验证始终由用户在浏览器中完成；agent 不需要也不应读取这些信息。
-源码安装后的命令名是 `hapsign`；便携版使用 `hapsign-cli.exe`（Windows）或
-`./hapsign-cli`（Linux/macOS），其余参数和结果完全相同。
+源码安装后的命令名是 `hapsign`；预构建 CLI 使用 `hapsign-cli.exe`（Windows）或
+`./hapsign-cli`（Linux/macOS），其余参数和结果完全相同。CLI External Toolchain 支持
+Windows x64、Linux x64、macOS arm64；CLI Portable 只支持 Windows/Linux x64。
+两个 edition 都内置 Python。Agent 每次部署后应先运行 `build-info --json` 确认
+edition、CLI protocol、平台、架构、bundled toolchain、publisher signing 与 notarization
+状态；macOS arm64 还应显示系统强制的 ad-hoc signature，再运行
+`doctor --json`。
 
 ## 稳定调用顺序
 
@@ -112,7 +117,8 @@ hapsign install --hap app-signed.hap --serial <serial> --json
 
 - `--output` 必须以 `.hap` 结尾，且不能与输入 HAP 是同一路径。
 - 指定输出已存在时默认失败；只有明确传入 `--overwrite-output` 才会原子替换。
-- 未指定 `--output` 时写入应用目录的 `signed_haps/`，使用 `<输入名>_signed.hap` 命名。
+- 未指定 `--output` 时写入共享用户目录的 `signed_haps/`，使用
+  `<输入名>_signed.hap` 命名。
 - `--state-dir` 配置 token/签名缓存根目录；`--output-dir` 配置默认产物目录。
   对应环境变量为 `HAPSIGN_SIGNING_DIR` 和 `HAPSIGN_SIGNED_HAPS_DIR`，命令行参数优先。
 - `sign` 输入已经签名时不重复签名；传入 `--output` 时仍会发布到该路径，否则
@@ -131,7 +137,7 @@ hapsign install --hap app-signed.hap --serial <serial> --json
   权限限制为 `0o600` 的明文文件。不要擅自删除签名材料，也不要把缓存放进共享或
   云同步目录。
 
-CLI 默认把缓存和签名产物绑定到应用目录及其配置，不依赖调用者当前工作目录。诊断旧版
+CLI 默认把缓存和签名产物绑定到共享用户目录及其配置，不依赖调用者当前工作目录。诊断旧版
 GUI/CLI 时仍应先记录实际可执行文件路径、版本、浏览器模式和日志目录，避免读取错实例。
 
 ## Linux 提示

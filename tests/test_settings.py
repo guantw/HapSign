@@ -12,7 +12,7 @@ def test_load_missing_config_uses_safe_defaults(tmp_path, monkeypatch) -> None:
 
     assert loaded == settings.AppSettings()
     assert loaded.browser_mode == "system_controlled"
-    assert loaded.signing_storage == "program"
+    assert loaded.signing_storage == "appdata"
     assert loaded.log_sensitive_data is False
     assert loaded.keep_signed_hap is True
 
@@ -55,7 +55,7 @@ def test_invalid_values_fall_back_and_sensitive_requires_boolean(
     loaded = settings.load_settings()
 
     assert loaded.log_level == "INFO"
-    assert loaded.signing_storage == "program"
+    assert loaded.signing_storage == "appdata"
     assert loaded.browser_mode == "system_controlled"
     assert loaded.log_sensitive_data is False
     assert loaded.keep_signed_hap is True
@@ -66,8 +66,11 @@ def test_signing_directory_modes(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "user_local_data_dir", lambda: tmp_path / "local")
 
     assert settings.signing_files_dir(settings.AppSettings()) == (
-        tmp_path / "app" / "signing_files"
+        tmp_path / "local" / "signing_files"
     )
+    assert settings.signing_files_dir(
+        settings.AppSettings(signing_storage="program")
+    ) == (tmp_path / "app" / "signing_files")
     assert settings.signing_files_dir(
         settings.AppSettings(signing_storage="appdata")
     ) == (tmp_path / "local" / "signing_files")
@@ -98,13 +101,11 @@ def test_exact_signing_directory_environment_override_wins(
     )
 
 
-def test_signed_hap_directory_is_always_in_program_directory(
-    tmp_path, monkeypatch
-) -> None:
+def test_signed_hap_directory_is_shared_user_directory(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(settings, "application_dir", lambda: tmp_path / "app")
     monkeypatch.setenv("HAPSIGN_DATA_DIR", str(tmp_path / "elsewhere"))
 
-    assert settings.signed_haps_dir() == tmp_path / "app" / "signed_haps"
+    assert settings.signed_haps_dir() == tmp_path / "elsewhere" / "signed_haps"
 
 
 def test_signed_hap_directory_environment_override_wins(tmp_path, monkeypatch) -> None:

@@ -20,11 +20,24 @@ def test_app_data_dir_honors_override(tmp_path, monkeypatch) -> None:
     assert runtime.app_data_dir() == target.resolve()
 
 
-def test_app_data_dir_defaults_to_application_dir(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("system", "expected"),
+    [
+        ("Windows", ("local", "HapSign")),
+        ("Darwin", ("home", "Library", "Application Support", "HapSign")),
+        ("Linux", ("state", "hapsign")),
+    ],
+)
+def test_app_data_dir_uses_shared_user_directory(
+    tmp_path, monkeypatch, system, expected
+) -> None:
     monkeypatch.delenv("HAPSIGN_DATA_DIR", raising=False)
-    monkeypatch.setattr(runtime, "application_dir", lambda: tmp_path)
+    monkeypatch.setattr(runtime.platform, "system", lambda: system)
+    monkeypatch.setattr(runtime.Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
 
-    assert runtime.app_data_dir() == tmp_path
+    assert runtime.app_data_dir() == tmp_path.joinpath(*expected)
 
 
 def test_portable_toolchain_takes_precedence(tmp_path, monkeypatch) -> None:

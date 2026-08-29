@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | 001 | 配置匹配、显式迁移或备份后刷新 | 接受新的缓存一致性校验 |
 | 002 | 可配置恢复普通系统浏览器 | 接受 `system_controlled` 新默认值 |
-| 003 | 可配置恢复旧状态与产物目录 | 接受应用目录新默认值 |
+| 003 | 可配置恢复旧状态与产物目录 | 接受 GUI/CLI 共享用户级目录的新默认值 |
 | 004 | 仅迁移调用方，不提供混合输出模式 | 保留 stdout 结果与 stderr 日志分离 |
 | 005 | 仅迁移调用方，不提供扁平参数兼容层 | 保留显式子命令接口 |
 
@@ -92,16 +92,22 @@ hapsign sign --hap app.hap --browser system
 
 ## HAPSIGN-BREAKING-003
 
-最新 master 的 PR #5 默认把 CLI 状态和签名产物放在
-`~/.hapsign/<bundle_name>/`；更早的源码 CLI 则使用进程当前工作目录下的相对
-`signing_files/`。新版默认使用应用目录（冻结版本为可执行文件所在目录，源码运行时为
-仓库根目录），并把默认产物放在应用目录的 `signed_haps/`。旧目录不会自动搬迁。
-如果新目录尚无对应状态，而 PR #5 的 `~/.hapsign` 中仍有 Token 或当日可用材料，
-`inspect` 会返回本编号。仅发现 Token 时这是非破坏性迁移提示；发现可复用签名材料时
-才会标记 `destructive: true` 和 `requires_user_decision: true`。忽略后者继续签名可能
-重新生成本地密钥，并删除、替换账号下的同名远端调试证书。
+旧版曾分别把 CLI 状态放在 `~/.hapsign`、进程工作目录或便携程序目录的
+`signing_files/`，GUI 的配置、日志和签名产物也可能保存在程序目录。新版让 HapSign GUI、
+CLI External Toolchain 和 CLI Portable 默认共享用户级根目录：
 
-配置优先级为“命令行参数 > 专用环境变量 > 现有应用配置/应用目录默认值”：
+- Windows: `%LOCALAPPDATA%\HapSign`
+- macOS: `~/Library/Application Support/HapSign`
+- Linux: `${XDG_STATE_HOME:-~/.local/state}/hapsign`
+
+配置、日志、`signing_files/` 和 `signed_haps/` 都位于该根目录。这样三个 edition 可复用
+同一 Token/调试材料，同时发布目录保持只读且不携带用户秘密。旧目录不会自动搬迁。
+如果新目录尚无对应状态，而 `~/.hapsign` 或旧便携程序目录仍有 Token/当日材料，
+`inspect` 会返回本编号。仅发现 Token 时是非破坏性提示；发现可复用签名材料时标记
+`destructive: true` 与 `requires_user_decision: true`。忽略后者继续签名可能重新生成
+本地密钥，并删除、替换账号下的同名远端调试证书。
+
+配置优先级为“命令行参数 > 专用环境变量 > 现有应用配置/用户目录默认值”：
 
 | 用途 | 命令行 | 环境变量 | 含义 |
 | --- | --- | --- | --- |
@@ -110,8 +116,8 @@ hapsign sign --hap app.hap --browser system
 | 默认产物目录 | `--output-dir` | `HAPSIGN_SIGNED_HAPS_DIR` | 未传 `--output` 时使用 |
 | 精确产物路径 | `--output` | 无 | 优先使用单个文件路径；可与 `--output-dir` 同时传 |
 
-`HAPSIGN_DATA_DIR` 保持兼容：它仍表示应用数据根目录，签名状态位于其
-`signing_files/` 子目录。`doctor --json` 的 `paths` 会给出本次解析后的绝对路径。
+`HAPSIGN_DATA_DIR` 表示共享应用数据根目录，签名状态位于其 `signing_files/` 子目录。
+`doctor --json` 的 `paths` 会给出本次解析后的绝对路径。
 
 若要恢复 PR #5 的用户主目录方案，显式传入原状态和产物路径即可：
 
@@ -120,7 +126,7 @@ hapsign sign --hap app.hap --state-dir ~/.hapsign \
   --output-dir ~/.hapsign/<bundle_name> --json
 ```
 
-若要继续复用更早版本的工作目录，也可显式传入旧路径：
+若要在确认来源并完成备份后继续复用旧便携/工作目录，也可显式传入旧路径：
 
 ```bash
 hapsign sign --hap app.hap --state-dir /old/cwd/signing_files \

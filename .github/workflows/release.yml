@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  PYTHONUTF8: "1"
+
+jobs:
+  quality:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff format --check .
+      - run: python -m ruff check .
+      - run: python -m pytest
+      - name: Verify tag and package version agree
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from hapsign import __version__
+          from scripts.build_release import release_version
+
+          expected = f"v{release_version(__version__)}"
+          actual = os.environ["RELEASE_TAG"]
+          if actual != expected:
+              raise SystemExit(f"tag/version mismatch: {actual} != {expected}")
+          PY
+
+  build:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            artifact: release-windows-x64
+            toolchain: true
+            gui: true
+          - runner: ubuntu-22.04
+            artifact: release-linux-x64
+            toolchain: true
+            gui: false
+          - runner: macos-15
+            artifact: release-macos-arm64
+            toolchain: false
+            gui: false
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install CLI build dependencies
+        if: ${{ matrix.gui == false }}
+        run: python -m pip install -e ".[bundle]"
+      - name: Install GUI build dependencies
+        if: ${{ matrix.gui }}
+        run: python -m pip install -e ".[gui,bundle]"
+      - name: Prepare locked public toolchain
+        if: ${{ matrix.toolchain }}
+        run: python scripts/prepare_toolchain.py
+      - name: Install bundled Chromium for HapSign GUI
+        if: ${{ matrix.gui }}
+        shell: pwsh
+        run: |
+          $env:PLAYWRIGHT_BROWSERS_PATH = "0"
+          python -m playwright install --no-shell chromium
+      - name: Build host release products
+        run: python scripts/build_release.py
+      - name: Upload matrix assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Download every matrix artifact
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-input
+          merge-multiple: true
+      - name: Validate and assemble release assets
+        run: >-
+          python scripts/prepare_release.py
+          --tag "${{ env.RELEASE_TAG }}"
+          --input-dir release-input
+          --output-dir release-publish
+          --source-commit "$(git rev-parse HEAD)"
+      - name: Attest release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: release-publish/*
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          flags=(--verify-tag --title "$RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md)
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            flags+=(--prerelease --latest=false)
+          else
+            flags+=(--latest)
+          fi
+          gh release create "$RELEASE_TAG" release-publish/* "${flags[@]}"

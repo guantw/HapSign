@@ -1,58 +1,72 @@
-# 开源发布门禁
+# Open-source binary release gate
 
-本文区分“公开源代码”和“公开预编译便携包”。仓库采用 MIT License，并不自动赋予
-发布者重新分发第三方二进制的权利。
+The MIT source license does not by itself grant redistribution rights for third-party binaries.
+Every public HapSign Release must satisfy the source, provenance, functional and safety gates below.
 
-## 源码仓库
+## Source gate
 
-公开前应确认：
+- lint, formatting and unit tests pass on the tagged commit;
+- tag exactly matches `hapsign.__version__` after PEP 440/release spelling conversion;
+- repository and history contain no HAP, Token, full UDID, certificate, Profile, private key,
+  keystore, browser credential, local config or user log;
+- license, privacy, security, contribution and third-party notice documents are current;
+- changelog names breaking changes and migration IDs.
 
-- `LICENSE`、`README.md`、`THIRD_PARTY_NOTICES.md`、`PRIVACY.md`、
-  `SECURITY.md`、`CONTRIBUTING.md` 和 `CODE_OF_CONDUCT.md` 存在；
-- README 明确非官方性质、在线接口兼容性风险、数据流和第三方许可边界；
-- 对所有“参考/移植自开源实现”的代码完成来源审计，记录上游仓库、commit 和许可；
-  如果存在 GPL 或其他与整体 MIT 声明不兼容的复制代码，先解决许可和标注，不能仅在
-  README 写一句致谢；
-- Git 历史及当前工作区不含 HAP、token、UDID、证书、Profile、私钥、日志、
-  本机配置或反编译产物；
-- CI 能在无账号、无设备、无 DevEco 环境下完成 lint、format 和单元测试；
-- 发布版本有 changelog、版本号、tag 和可复现的构建命令；
-- 仓库设置已启用 GitHub Private vulnerability reporting，或 SECURITY 文件提供
-  一个真实可用的私密安全联系方式。
+## Binary/provenance gate
 
-## 预编译包
+- build only through `.github/workflows/release.yml` from an existing tag;
+- receive exactly the six archives defined in `PACKAGING.md`;
+- Portable/GUI toolchains come only from the public URLs and SHA-256 values in
+  `toolchain.lock.json`; no DevEco installation is copied into an official package;
+- package roots retain Python distribution licenses, Temurin legal notices, OpenHarmony NOTICE and
+  the matching libusb source snapshot;
+- each package contains correct `BUILD_INFO.json` and no config, Token, signing material, HAP or log;
+- final `SHA256SUMS`, `release-manifest.json` and GitHub provenance attestation cover every binary
+  archive and Prompt;
+- run malware scanning appropriate to the repository before stable promotion.
 
-每个公开二进制包还必须满足：
+## Deliberate unsigned policy
 
-- 根目录包含 HapSign `LICENSE`、隐私说明、第三方声明和构建说明；
-- `licenses/python/` 包含冻结依赖随附的许可和 NOTICE；
-- Temurin runtime 的 `legal/` 未被裁掉，OpenHarmony SDK 的 `NOTICE.txt` 已保留；
-- `licenses/libusb-source/` 包含与 `libusb_shared` 对应的完整源码快照；
-- 记录 Python、Qt、Playwright、Temurin、HDC、hap-sign-tool 和可选 Chromium 的准确
-  版本、来源及 SHA-256；
-- 工具链来自 `toolchain.lock.json` 锁定的公共上游，实际产物哈希与
-  `PROVENANCE.txt` 一致；
-- Qt 以可替换的共享库形式分发，并按选择的 LGPL-3.0 路径提供相应通知和许可文本；
-- 兼容包保留 Chromium/Playwright 的第三方许可文件；
-- 解压目录不含 `hapsign-config.json`、`logs/`、`signing_files/`、`signed_haps/`
-  或任何构建者/测试者数据；
-- 对最终发布归档（Windows/macOS ZIP 或 Linux tar.gz）运行恶意软件扫描、签名（若有
-  代码签名证书）和 SHA-256 校验。
+Official Windows and macOS artifacts do not use a trusted publisher identity and are not notarized.
+This is a product decision, not an omitted optional step. Apple Silicon requires every arm64 Mach-O
+to carry at least an ad-hoc signature, so PyInstaller automatically creates identity-less signatures
+for the macOS CLI. They are required load metadata, not a Developer ID or publisher signature.
+Release notes, package metadata, manifest and Prompts must disclose the distinction.
 
-Windows/Linux x64 正式构建必须先运行 `python scripts/prepare_toolchain.py`，再运行
-`python scripts/build_portable.py`。准备脚本锁定并校验 OpenHarmony 公共 SDK 与
-Eclipse Temurin，只提取运行所需文件，并附带 libusb 对应源代码。
+- never configure `signtool`, Apple Developer ID, a signing secret or notarization in the official
+  workflow; accept only PyInstaller's mandatory macOS arm64 ad-hoc processing;
+- never instruct users or Agents to disable/bypass SmartScreen, Gatekeeper, antivirus or organization
+  controls;
+- users requiring OS code signing build from source and sign under their own identity and policy;
+- GitHub artifact attestation plus SHA-256 supplies build provenance/integrity, but is not presented as
+  an OS publisher identity.
 
-使用 `--allow-deveco-toolchain` 生成的是本机兼容/排障包，不通过公开发布门禁；
-使用 `--skip-toolchain` 生成的是无工具链 GUI/CLI 包，也不能作为完整便携版发布。
+## Functional prerelease gate
 
-## GitHub 发布建议
+CI proves packaging and deterministic interfaces; it cannot prove the interactive service/device
+path. Before marking a prerelease stable, record the following against the exact downloaded assets:
 
-1. 整理并审查未提交改动。
-2. 执行 `python -m ruff format --check .`、`python -m ruff check .` 和
-   `python -m pytest --cov`。
-3. 运行敏感文件扫描和 `git diff --check`。
-4. 更新 `hapsign.__version__` 与 `CHANGELOG.md`。
-5. 创建签名 tag。
-6. 只上传已通过本页许可门禁的产物，并在 Release notes 中列出 SHA-256、支持平台、
-   已知限制和第三方工具链来源。
+- Windows GUI: clean-machine extraction, embedded Chromium login, CAPTCHA/2FA/consent, device
+  discovery, unsigned-HAP debug signing, install and post-install inspection;
+- Windows/Linux Portable: `build-info`, complete `doctor`, system-controlled browser login, HDC
+  discovery, sign, deploy, signed-HAP install and post-install inspection;
+- Windows/Linux/macOS External Toolchain: automatic tool discovery, actual path/source disclosure,
+  missing-dependency guidance, tested DevEco/OpenHarmony combination, sign/install flow;
+- zero devices, multiple devices, unauthorized device, missing browser and offline behavior;
+- Prompt automatic download, deliberate download failure/manual fallback, SHA mismatch rejection and
+  edition/platform mismatch rejection;
+- `HAPSIGN-BREAKING-003` legacy-state detection without silent migration; all destructive warnings
+  require a human choice;
+- no stdout/log/Prompt output contains Token, private key, Profile content or full UDID.
+
+Update `TESTED_ENVIRONMENTS.md` with the actual OS/tool/device versions and date. A “validation
+target” is not promoted to tested until these results exist.
+
+## Publish and rollback
+
+Use `vMAJOR.MINOR.PATCH-rc.N` for the first public attempts. The workflow publishes such tags as
+GitHub prereleases and never overwrites an existing Release. Promote by creating a new stable tag only
+after all manual gates pass.
+
+If a defect is found, mark the affected prerelease notes clearly and publish a new tag. Do not replace
+assets in place: immutable names, hashes and attestations are part of the trust model.

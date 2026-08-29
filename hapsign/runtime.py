@@ -42,11 +42,18 @@ def resource_dir() -> Path:
 
 
 def app_data_dir() -> Path:
-    """返回应用数据根目录；默认与程序可执行文件位于同一目录。"""
+    """Return the shared per-user data root used by GUI and every CLI edition."""
     override = os.environ.get("HAPSIGN_DATA_DIR")
     if override:
         return Path(override).expanduser().resolve()
-    return application_dir()
+    system = platform.system()
+    if system == "Windows":
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        return root / APP_NAME
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    return root / APP_NAME.lower()
 
 
 @dataclass(frozen=True)

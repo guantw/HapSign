@@ -5,6 +5,7 @@ from datetime import date
 
 import pytest
 
+from hapsign import migrations
 from hapsign.migrations import (
     LEGACY_CACHE_CHANGE_ID,
     LEGACY_STATE_CHANGE_ID,
@@ -152,6 +153,27 @@ def test_legacy_state_warning_does_not_block_for_token_only(tmp_path) -> None:
     assert warning is not None
     assert warning["destructive"] is False
     assert warning["requires_user_decision"] is False
+    assert warning["found"] == ["token_cache"]
+
+
+def test_frozen_build_detects_legacy_program_directory(tmp_path, monkeypatch) -> None:
+    application = tmp_path / "old-portable"
+    legacy = application / "signing_files"
+    state = tmp_path / "shared-state"
+    legacy.mkdir(parents=True)
+    (legacy / ".token_cache.json").write_bytes(b"token")
+    monkeypatch.setattr(migrations.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(migrations, "application_dir", lambda: application)
+    monkeypatch.setattr(migrations.Path, "home", lambda: tmp_path / "home")
+
+    warning = legacy_state_warning(
+        state,
+        state / "com.example.app",
+        bundle_name="com.example.app",
+    )
+
+    assert warning is not None
+    assert warning["legacy_state_dir"] == str(legacy.resolve())
     assert warning["found"] == ["token_cache"]
 
 

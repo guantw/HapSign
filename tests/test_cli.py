@@ -585,6 +585,18 @@ def test_doctor_report_separates_signing_and_device_capabilities(tmp_path) -> No
     assert report["breaking_changes"][0]["id"].startswith("HAPSIGN-BREAKING-")
 
 
+def test_build_info_json_is_machine_readable(capsys) -> None:
+    result = cli.main(["build-info", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["ok"] is True
+    assert payload["command"] == "build-info"
+    assert payload["edition"] == "source"
+    assert payload["cli_protocol"] == 2
+    assert payload["code_signed"] is False
+
+
 def test_doctor_json_uses_exit_code_for_incomplete_toolchain(
     monkeypatch, capsys
 ) -> None:

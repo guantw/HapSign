@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from hapsign import __version__
+from hapsign.build_info import build_info
 from hapsign.cancellation import OperationCancelled
 from hapsign.config import DEVICE_TYPE_PHONE
 from hapsign.diagnostics import redact_sensitive_text
@@ -52,6 +53,7 @@ def _default_browser_mode() -> str:
 
 COMMANDS = {
     "auth",
+    "build-info",
     "deploy",
     "devices",
     "doctor",
@@ -243,6 +245,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"hapsign {__version__}")
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    build = subparsers.add_parser(
+        "build-info",
+        help="输出 edition、协议、平台、架构和内置组件信息",
+        formatter_class=_formatter,
+    )
+    _add_output_options(build)
 
     doctor = subparsers.add_parser(
         "doctor",
@@ -466,6 +475,7 @@ def doctor_report(
         "platform": platform_tag(),
         "architecture": platform.machine(),
         "python": platform.python_version(),
+        "build": build_info(),
         "toolchain_source": selected.source,
         "paths": {
             "application_dir": str(application_dir()),
@@ -592,6 +602,13 @@ def _run_doctor(args: argparse.Namespace) -> int:
     result["message"] = "环境诊断完成"
     _emit(result, args.json_output)
     return EXIT_OK if result["ok"] else EXIT_OPERATION_FAILED
+
+
+def _run_build_info(args: argparse.Namespace) -> int:
+    result = {"ok": True, "command": "build-info", **build_info()}
+    result["message"] = "构建信息读取完成"
+    _emit(result, args.json_output)
+    return EXIT_OK
 
 
 def _run_inspect(args: argparse.Namespace) -> int:
@@ -907,6 +924,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     _configure_logging(args.verbose)
 
     try:
+        if args.command == "build-info":
+            return _run_build_info(args)
         if args.command == "doctor":
             return _run_doctor(args)
         if args.command == "inspect":
