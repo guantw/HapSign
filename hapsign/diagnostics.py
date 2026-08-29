@@ -31,6 +31,13 @@ _BEARER_TOKEN_RE = re.compile(r"(?i)(?P<prefix>\bBearer\s+)(?P<value>[^\s,}'\"\]
 _DEVICE_UDID_RE = re.compile(r"(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
 
 
+def is_valid_device_udid(value: object) -> bool:
+    """返回值是否为完整的 64 位十六进制设备 UDID。"""
+    return (
+        isinstance(value, str) and _DEVICE_UDID_RE.fullmatch(value.strip()) is not None
+    )
+
+
 def set_sensitive_logging(enabled: bool) -> None:
     """控制是否允许诊断日志包含 token 及完整网络载荷。"""
     global _sensitive_logging_enabled

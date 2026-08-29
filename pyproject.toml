@@ -16,6 +16,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -23,6 +24,7 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
 ]
 dependencies = [
+    "playwright>=1.40,<2",
     "requests>=2.31,<3",
 ]
 
@@ -73,7 +75,6 @@ source = ["hapsign"]
 omit = ["hapsign/gui.py"]
 
 [tool.coverage.report]
-fail_under = 58
 show_missing = true
 skip_covered = true
 

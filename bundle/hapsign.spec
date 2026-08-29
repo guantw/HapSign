@@ -43,6 +43,24 @@ analysis = Analysis(
     noarchive=False,
     optimize=1,
 )
+
+# Qt6Core imports the unsuffixed ``icuuc.dll`` on Windows.  PyInstaller resolves
+# DLL imports through the build machine's PATH; a PATH entry such as the bundled
+# Poppler runtime can therefore inject an incompatible ICU DLL into the package
+# (the Qt binary expects the Windows/system ICU ABI).  Keep only an ICU DLL that
+# is actually shipped by the PySide6 package, and never freeze an unrelated PATH
+# copy.  This also makes the result independent of the Codex/PDF runtime PATH.
+_pyside_root = Path(__import__("PySide6").__file__).resolve().parent
+_icu_names = {"icuuc.dll", "icuin.dll", "icudt.dll", "icudt78.dll"}
+analysis.binaries = [
+    item
+    for item in analysis.binaries
+    if not (
+        Path(item[0]).name.lower() in _icu_names
+        and _pyside_root not in Path(item[1]).resolve().parents
+    )
+]
+
 pyz = PYZ(analysis.pure)
 
 exe = EXE(

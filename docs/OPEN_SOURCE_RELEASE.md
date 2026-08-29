@@ -36,14 +36,15 @@
 - 兼容包保留 Chromium/Playwright 的第三方许可文件；
 - 解压目录不含 `hapsign-config.json`、`logs/`、`signing_files/`、`signed_haps/`
   或任何构建者/测试者数据；
-- 对最终 ZIP 运行恶意软件扫描、签名（若有代码签名证书）和 SHA-256 校验。
+- 对最终发布归档（Windows/macOS ZIP 或 Linux tar.gz）运行恶意软件扫描、签名（若有
+  代码签名证书）和 SHA-256 校验。
 
-Windows 正式构建必须先运行 `python scripts/prepare_toolchain.py`，再运行
+Windows/Linux x64 正式构建必须先运行 `python scripts/prepare_toolchain.py`，再运行
 `python scripts/build_portable.py`。准备脚本锁定并校验 OpenHarmony 公共 SDK 与
 Eclipse Temurin，只提取运行所需文件，并附带 libusb 对应源代码。
 
 使用 `--allow-deveco-toolchain` 生成的是本机兼容/排障包，不通过公开发布门禁；
-使用 `--skip-toolchain` 生成的是 GUI-only 包，也不能作为完整便携版发布。
+使用 `--skip-toolchain` 生成的是无工具链 GUI/CLI 包，也不能作为完整便携版发布。
 
 ## GitHub 发布建议
 

@@ -26,12 +26,12 @@ Profile。重复 UDID 会复用已有设备记录。用户应确认自己有权�
 
 ## 本地保存
 
-根据入口和设置，以下文件保存在 CLI 用户主目录、程序目录、用户 Local AppData
-或用户选择的目录：
+根据入口和设置，以下文件保存在程序目录、用户 Local AppData 或用户选择的目录；
+CLI 默认遵循应用配置，也可用参数或专用环境变量覆盖：
 
-- CLI 的 `~/.hapsign/.token_cache.json`（桌面/便携版为
-  `signing_files/.token_cache.json`）：访问令牌、刷新令牌、JWT 和账号基本字段；
-- CLI 的 `~/.hapsign/<bundle>/`（桌面/便携版为 `signing_files/<bundle>/`）：
+- `<state-dir>/.token_cache.json`（默认 `signing_files/.token_cache.json`）：
+  访问令牌、刷新令牌、JWT 和账号基本字段；
+- `<state-dir>/<bundle>/`（默认 `signing_files/<bundle>/`）：
   私钥密钥库、CSR、证书、Profile 和缓存元数据；
 - `signed_haps/`：可选保留的最后一个已签名 HAP；
 - `logs/hapsign.log*`：诊断日志；

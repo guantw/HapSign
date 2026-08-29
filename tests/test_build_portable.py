@@ -1,9 +1,12 @@
 """便携版保守精简规则测试。"""
 
 import hashlib
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from hapsign.runtime import ToolchainPaths
 from scripts import build_portable
 
 
@@ -16,6 +19,63 @@ def test_write_sha256_file_uses_standard_sidecar_format(tmp_path) -> None:
     expected = hashlib.sha256(b"portable archive").hexdigest()
     assert checksum.name == "HapSign-portable-windows.zip.sha256"
     assert checksum.read_text(encoding="ascii") == f"{expected}  {archive.name}\n"
+
+
+def test_linux_portable_archive_uses_tar_to_preserve_executable_bits() -> None:
+    assert build_portable._portable_archive_settings("linux") == (
+        ".tar.gz",
+        "gztar",
+    )
+    assert build_portable._portable_archive_settings("windows") == (".zip", "zip")
+    assert build_portable._portable_archive_settings("macos") == (".zip", "zip")
+
+
+def test_build_cli_executable_adds_console_program_to_portable(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    project = tmp_path / "project"
+    portable = tmp_path / "HapSign"
+    portable.mkdir()
+
+    def fake_run(command, *, env) -> None:
+        assert env["TEST_ENV"] == "1"
+        output = command[command.index("--distpath") + 1]
+        name = command[command.index("--name") + 1]
+        destination = build_portable.Path(output)
+        destination.mkdir(parents=True)
+        suffix = ".exe" if build_portable.sys.platform == "win32" else ""
+        (destination / f"{name}{suffix}").write_bytes(b"cli")
+
+    monkeypatch.setattr(build_portable, "PROJECT_ROOT", project)
+    monkeypatch.setattr(build_portable, "_run", fake_run)
+
+    result = build_portable._build_cli_executable(
+        portable,
+        env={"TEST_ENV": "1"},
+    )
+
+    assert result == portable / build_portable._cli_executable_name()
+    assert result.read_bytes() == b"cli"
+
+
+def test_frozen_cli_smoke_checks_version_and_doctor(tmp_path, monkeypatch) -> None:
+    executable = tmp_path / build_portable._cli_executable_name()
+    executable.write_bytes(b"cli")
+    run = Mock(
+        side_effect=[
+            SimpleNamespace(returncode=0, stdout="hapsign 0.1.0\n", stderr=""),
+            SimpleNamespace(returncode=0, stdout='{"ok":true}', stderr=""),
+        ]
+    )
+    monkeypatch.setattr(build_portable.subprocess, "run", run)
+
+    build_portable._smoke_test_frozen_cli(tmp_path, require_toolchain=True)
+
+    assert [call.args[0][1:] for call in run.call_args_list] == [
+        ["--version"],
+        ["doctor", "--json"],
+    ]
 
 
 def test_jbr_pruning_only_targets_known_jcef_resources(tmp_path) -> None:
@@ -291,6 +351,8 @@ def test_release_documents_include_open_source_notices(
         "THIRD_PARTY_NOTICES.md": "notices",
         "docs/PACKAGING.md": "building",
         "docs/OPEN_SOURCE_RELEASE.md": "release",
+        "docs/AGENT_SIGNING.md": "agent",
+        "docs/MIGRATIONS.md": "migrations",
     }
     for name, content in sources.items():
         path = project / name
@@ -313,6 +375,8 @@ def test_release_documents_include_open_source_notices(
         "THIRD_PARTY_NOTICES.md",
         "BUILDING.md",
         "OPEN_SOURCE_RELEASE.md",
+        "AGENT_SIGNING.md",
+        "MIGRATIONS.md",
     ):
         assert (portable / name).is_file()
 
@@ -370,3 +434,37 @@ def test_copy_toolchain_requires_explicit_deveco_fallback(
             keep_full_jbr=False,
             allow_local_toolchain=False,
         )
+
+
+def test_local_linux_toolchain_copies_libusb_shared_object(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "deveco"
+    runtime = source / "jbr"
+    toolchains = source / "toolchains"
+    java = runtime / "bin" / "java"
+    keytool = runtime / "bin" / "keytool"
+    signer = toolchains / "lib" / "hap-sign-tool.jar"
+    hdc = toolchains / "hdc"
+    libusb = toolchains / "libusb_shared.so"
+    for path in (java, keytool, signer, hdc, libusb):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode())
+        path.chmod(path.stat().st_mode | 0o111)
+    selected = ToolchainPaths(
+        java=java,
+        keytool=keytool,
+        hap_sign_tool=signer,
+        hdc=hdc,
+        source="test DevEco",
+    )
+    portable = tmp_path / "HapSign"
+    monkeypatch.setattr("hapsign.runtime.discover_toolchain", lambda: selected)
+    monkeypatch.setattr("hapsign.runtime.platform_tag", lambda: "linux")
+    monkeypatch.setattr(build_portable, "_smoke_test_toolchain", lambda _root: None)
+
+    build_portable._copy_local_toolchain(portable, keep_full_jbr=False)
+
+    target = portable / "resources" / "toolchain" / "linux"
+    assert (target / "bin" / "libusb_shared.so").read_bytes() == (libusb.read_bytes())

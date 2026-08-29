@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import platform
 import sys
 import zipfile
 from collections.abc import Sequence
@@ -17,12 +18,48 @@ from hapsign import __version__
 from hapsign.cancellation import OperationCancelled
 from hapsign.config import DEVICE_TYPE_PHONE
 from hapsign.diagnostics import redact_sensitive_text
-from hapsign.pipeline import SignPipeline, default_state_dir
+from hapsign.migrations import (
+    breaking_changes,
+    cache_compatibility_warning,
+    legacy_state_warning,
+    migrate_legacy_cache,
+)
+from hapsign.pipeline import SignPipeline
+from hapsign.runtime import (
+    ToolchainPaths,
+    application_dir,
+    discover_toolchain,
+    platform_tag,
+)
+from hapsign.settings import (
+    config_file_path,
+    load_settings,
+    signed_haps_dir,
+    signing_files_dir,
+)
 from hapsign.signing.hap_inspect import is_hap_signed
 from hapsign.signing.installer import Installer
 from hapsign.token import secure_token_cache
 
-COMMANDS = {"auth", "devices", "sign", "install", "deploy"}
+_BROWSER_MODES = ("system", "system_controlled", "playwright")
+
+
+def _default_browser_mode() -> str:
+    """返回可复现的 CLI 浏览器默认值，并允许显式环境变量覆盖。"""
+    configured = os.environ.get("HAPSIGN_BROWSER", "system_controlled").lower()
+    return configured if configured in _BROWSER_MODES else "system_controlled"
+
+
+COMMANDS = {
+    "auth",
+    "deploy",
+    "devices",
+    "doctor",
+    "inspect",
+    "install",
+    "migrate-cache",
+    "sign",
+}
 EXIT_OK = 0
 EXIT_OPERATION_FAILED = 1
 EXIT_USAGE = 2
@@ -59,11 +96,9 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
 def _add_state_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--state-dir",
-        default=default_state_dir(),
+        default=str(signing_files_dir(load_settings())),
         help=(
-            "Token 与默认签名材料根目录；默认用户主目录 ~/.hapsign"
-            "（Windows 为 %%USERPROFILE%%\\.hapsign）。"
-            "Token 不会出现在 JSON 输出中"
+            "Token 与默认签名材料根目录；默认按应用配置；环境变量 HAPSIGN_SIGNING_DIR"
         ),
     )
 
@@ -85,20 +120,11 @@ def _add_hap_identity_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_signing_options(parser: argparse.ArgumentParser) -> None:
-    _add_hap_identity_options(parser)
-    parser.add_argument(
-        "--serial",
-        required=True,
-        type=_nonempty_serial,
-        help="hdc list targets 返回的目标序列号；Profile 将绑定该设备",
-    )
-    parser.add_argument("--country", default="CN", help="华为账号国家码；默认 CN")
-    parser.add_argument(
-        "--device-type",
-        default=DEVICE_TYPE_PHONE,
-        help="签名平台注册的设备类型码；默认 4（手机/平板/2in1）",
-    )
+def _add_path_options(
+    parser: argparse.ArgumentParser,
+    *,
+    include_exact_output: bool,
+) -> None:
     _add_state_option(parser)
     parser.add_argument(
         "--work-dir",
@@ -108,19 +134,73 @@ def _add_signing_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-dir",
         default="",
-        help="签名 HAP 输出目录；默认与当前 bundle 的签名材料目录相同",
+        help=(
+            "默认签名 HAP 输出目录；默认应用目录 signed_haps/；"
+            "环境变量 HAPSIGN_SIGNED_HAPS_DIR"
+        ),
     )
-    parser.add_argument(
-        "--browser",
-        choices=("system", "system_controlled", "playwright"),
-        default="system",
-        help="首次认证使用的浏览器模式；CLI 默认 system",
-    )
+    if include_exact_output:
+        parser.add_argument(
+            "--output",
+            default="",
+            help="签名 HAP 的精确输出路径；优先于 --output-dir",
+        )
+        parser.add_argument(
+            "--overwrite-output",
+            action="store_true",
+            help="允许覆盖 --output 指定的已有文件",
+        )
+
+
+def _add_capability_option(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--enable-capability",
         action="store_true",
         help="尝试使用 Real Profile（APL=system_basic）；需要已注册 AGC 应用",
     )
+
+
+def _add_signing_options(
+    parser: argparse.ArgumentParser,
+    *,
+    require_serial: bool,
+) -> None:
+    _add_hap_identity_options(parser)
+    if require_serial:
+        parser.add_argument(
+            "--serial",
+            required=True,
+            type=_nonempty_serial,
+            help="hdc list targets 返回的目标序列号；安装时必须显式指定",
+        )
+        parser.set_defaults(device_udid="")
+    else:
+        target = parser.add_mutually_exclusive_group()
+        target.add_argument(
+            "--serial",
+            type=_nonempty_serial,
+            default=None,
+            help="hdc list targets 返回的目标序列号",
+        )
+        target.add_argument(
+            "--device-udid",
+            default="",
+            help="可信的 64 位设备 UDID；可在不连接本机设备时申请 Profile",
+        )
+    parser.add_argument("--country", default="CN", help="华为账号国家码；默认 CN")
+    parser.add_argument(
+        "--device-type",
+        default=DEVICE_TYPE_PHONE,
+        help="签名平台注册的设备类型码；默认 4（手机/平板/2in1）",
+    )
+    _add_path_options(parser, include_exact_output=True)
+    parser.add_argument(
+        "--browser",
+        choices=_BROWSER_MODES,
+        default=_default_browser_mode(),
+        help="首次认证使用的浏览器模式；默认 system_controlled",
+    )
+    _add_capability_option(parser)
     parser.add_argument(
         "--refresh-token",
         action="store_true",
@@ -145,6 +225,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=_formatter,
         epilog="""\
 典型 Agent 流程:
+  hapsign doctor --json
+  hapsign inspect --hap app-unsigned.hap --json
   hapsign devices list --connected-only --json
   hapsign auth status --json
   hapsign auth --json
@@ -161,6 +243,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"hapsign {__version__}")
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    doctor = subparsers.add_parser(
+        "doctor",
+        help="检查平台、工具链、路径和兼容性变更；不修改本地状态",
+        formatter_class=_formatter,
+    )
+    _add_state_option(doctor)
+    doctor.add_argument("--output-dir", default="", help="覆盖诊断中的默认产物目录")
+    _add_output_options(doctor)
+
+    inspect = subparsers.add_parser(
+        "inspect",
+        help="只读检查 HAP、解析路径并报告适用的迁移警告",
+        formatter_class=_formatter,
+    )
+    _add_hap_identity_options(inspect)
+    _add_path_options(inspect, include_exact_output=False)
+    _add_capability_option(inspect)
+    _add_output_options(inspect)
+
+    migrate = subparsers.add_parser(
+        "migrate-cache",
+        help="在用户确认旧 Profile 类型后迁移当天缓存元数据",
+        formatter_class=_formatter,
+    )
+    _add_hap_identity_options(migrate)
+    _add_state_option(migrate)
+    migrate.add_argument(
+        "--work-dir",
+        default="",
+        help="当前 bundle 的旧签名材料目录；默认 <state-dir>/<bundle>",
+    )
+    migrate.add_argument(
+        "--profile-type",
+        required=True,
+        choices=("normal", "system-basic"),
+        help="用户确认的旧 Profile 类型",
+    )
+    _add_output_options(migrate)
 
     auth = subparsers.add_parser(
         "auth",
@@ -187,9 +308,9 @@ def build_parser() -> argparse.ArgumentParser:
     auth.add_argument("--country", default="CN", help="华为账号国家码；默认 CN")
     auth.add_argument(
         "--browser",
-        choices=("system", "system_controlled", "playwright"),
-        default="system",
-        help="认证浏览器模式；CLI 默认 system",
+        choices=_BROWSER_MODES,
+        default=_default_browser_mode(),
+        help="认证浏览器模式；默认 system_controlled",
     )
     auth.add_argument(
         "--refresh",
@@ -228,9 +349,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sign = subparsers.add_parser(
         "sign",
-        help="为指定设备签名 HAP，但不安装",
+        help="签名 HAP 但不安装；可显式选择设备或复用兼容缓存",
         description=(
-            "为 --serial 对应设备生成 debug Profile 并签名。"
+            "为 --serial/--device-udid 对应设备生成 debug Profile 并签名；"
+            "未指定设备时可复用兼容缓存或从当前 HDC 目标读取 UDID。"
             "已有当日 Auth Token 会复用；"
             "同一 bundle 切换设备时会自动丢弃不匹配的 Profile 缓存。"
         ),
@@ -241,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
   hapsign sign --hap app.hap --serial <serial> --output-dir ./signed --json
 """,
     )
-    _add_signing_options(sign)
+    _add_signing_options(sign, require_serial=False)
 
     install = subparsers.add_parser(
         "install",
@@ -279,12 +401,94 @@ def build_parser() -> argparse.ArgumentParser:
   hapsign deploy --hap app-signed.hap --serial <serial> --json
 """,
     )
-    _add_signing_options(deploy)
+    _add_signing_options(deploy, require_serial=True)
     return parser
 
 
 def _command_from_args(argv: Sequence[str]) -> str:
     return next((item for item in argv if item in COMMANDS), "unknown")
+
+
+def _tool_status(path: Path, *, executable: bool) -> dict[str, object]:
+    exists = path.is_file()
+    can_execute = exists and (
+        os.name == "nt" or not executable or os.access(path, os.X_OK)
+    )
+    return {
+        "path": str(path.expanduser().absolute()),
+        "exists": exists,
+        "executable": can_execute,
+    }
+
+
+def _resolved_directories(
+    *,
+    state_override: str = "",
+    output_override: str = "",
+) -> tuple[Path, Path]:
+    settings = load_settings()
+    state = (
+        Path(state_override).expanduser().resolve()
+        if state_override
+        else signing_files_dir(settings)
+    )
+    output = (
+        Path(output_override).expanduser().resolve()
+        if output_override
+        else signed_haps_dir()
+    )
+    return state, output
+
+
+def _work_directory(state_dir: Path, work_override: str, bundle_name: str) -> Path:
+    if work_override:
+        return Path(work_override).expanduser().resolve()
+    return state_dir / bundle_name
+
+
+def doctor_report(
+    toolchain: ToolchainPaths | None = None,
+    *,
+    state_dir: str = "",
+    output_dir: str = "",
+) -> dict[str, object]:
+    """返回适合 agent 判断下一步动作的跨平台诊断结果。"""
+    selected = toolchain or discover_toolchain()
+    resolved_state, resolved_output = _resolved_directories(
+        state_override=state_dir,
+        output_override=output_dir,
+    )
+    signing_problems = selected.missing(require_signing=True, require_hdc=False)
+    hdc_problems = selected.missing(require_signing=False, require_hdc=True)
+    return {
+        "ok": not signing_problems and not hdc_problems,
+        "command": "doctor",
+        "platform": platform_tag(),
+        "architecture": platform.machine(),
+        "python": platform.python_version(),
+        "toolchain_source": selected.source,
+        "paths": {
+            "application_dir": str(application_dir()),
+            "current_working_dir": str(Path.cwd()),
+            "config_file": str(config_file_path()),
+            "state_dir": str(resolved_state),
+            "output_dir": str(resolved_output),
+        },
+        "breaking_changes": breaking_changes(),
+        "capabilities": {
+            "signing": {"ok": not signing_problems, "problems": signing_problems},
+            "device": {"ok": not hdc_problems, "problems": hdc_problems},
+        },
+        "tools": {
+            "java": _tool_status(selected.java, executable=True),
+            "keytool": _tool_status(selected.keytool, executable=True),
+            "hap_sign_tool": _tool_status(
+                selected.hap_sign_tool,
+                executable=False,
+            ),
+            "hdc": _tool_status(selected.hdc, executable=True),
+        },
+    }
 
 
 def _parse_args(
@@ -322,7 +526,9 @@ def _configure_logging(verbose: bool) -> None:
 
 def _emit(payload: dict[str, object], json_output: bool) -> None:
     if json_output:
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        # ASCII JSON avoids Windows console code-page corruption while preserving
+        # the original Unicode values after parsing.
+        print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
         return
     if payload.get("ok"):
         print(payload.get("message", "操作成功"))
@@ -367,6 +573,93 @@ def _resolve_hap(raw_path: str) -> Path:
     if not path.is_file():
         raise ValueError(f"HAP 文件不存在: {path}")
     return path
+
+
+def _resolved_bundle_paths(
+    args: argparse.Namespace,
+    bundle_name: str,
+) -> tuple[Path, Path, Path]:
+    state_dir, output_dir = _resolved_directories(
+        state_override=args.state_dir,
+        output_override=getattr(args, "output_dir", ""),
+    )
+    work_dir = _work_directory(state_dir, getattr(args, "work_dir", ""), bundle_name)
+    return state_dir, work_dir, output_dir
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    result = doctor_report(state_dir=args.state_dir, output_dir=args.output_dir)
+    result["message"] = "环境诊断完成"
+    _emit(result, args.json_output)
+    return EXIT_OK if result["ok"] else EXIT_OPERATION_FAILED
+
+
+def _run_inspect(args: argparse.Namespace) -> int:
+    hap_path = _resolve_hap(args.hap)
+    bundle_name = args.bundle_name or detect_bundle_name(str(hap_path))
+    state_dir, work_dir, output_dir = _resolved_bundle_paths(args, bundle_name)
+    signed = is_hap_signed(hap_path)
+    warnings: list[dict[str, object]] = []
+    if not signed:
+        state_warning = legacy_state_warning(
+            state_dir,
+            work_dir,
+            bundle_name=bundle_name,
+        )
+        if state_warning is not None:
+            warnings.append(state_warning)
+        warning = cache_compatibility_warning(
+            work_dir / "metadata.json",
+            bundle_name=bundle_name,
+            enable_capability=args.enable_capability,
+        )
+        if warning is not None:
+            warnings.append(warning)
+    _emit(
+        {
+            "ok": True,
+            "command": "inspect",
+            "message": "HAP 检查完成",
+            "platform": platform_tag(),
+            "hap": str(hap_path),
+            "bundle_name": bundle_name,
+            "signed": signed,
+            "paths": {
+                "state_dir": str(state_dir),
+                "work_dir": str(work_dir),
+                "output_dir": str(output_dir),
+            },
+            "migration_warnings": warnings,
+        },
+        args.json_output,
+    )
+    return EXIT_OK
+
+
+def _run_migrate_cache(args: argparse.Namespace) -> int:
+    hap_path = _resolve_hap(args.hap)
+    bundle_name = args.bundle_name or detect_bundle_name(str(hap_path))
+    state_dir = Path(args.state_dir).expanduser().resolve()
+    work_dir = _work_directory(state_dir, args.work_dir, bundle_name)
+    result = migrate_legacy_cache(
+        work_dir / "metadata.json",
+        bundle_name=bundle_name,
+        enable_capability=args.profile_type == "system-basic",
+    )
+    _emit(
+        {
+            "ok": True,
+            "command": "migrate-cache",
+            "message": "旧签名缓存元数据迁移完成",
+            "platform": platform_tag(),
+            "hap": str(hap_path),
+            "bundle_name": bundle_name,
+            "capability_mode": args.profile_type,
+            **result,
+        },
+        args.json_output,
+    )
+    return EXIT_OK
 
 
 def _auth_pipeline(args: argparse.Namespace) -> SignPipeline:
@@ -453,6 +746,9 @@ def _build_sign_pipeline(
     hap_path: Path,
     bundle_name: str,
     *,
+    state_dir: Path,
+    work_dir: Path,
+    output_dir: Path,
     install_after_sign: bool,
 ) -> SignPipeline:
     return SignPipeline(
@@ -460,14 +756,17 @@ def _build_sign_pipeline(
         bundle_name=bundle_name,
         country=args.country,
         device_type=args.device_type,
-        serial=args.serial,
-        work_dir=args.work_dir,
-        state_dir=args.state_dir,
+        serial=args.serial or "",
+        device_udid=args.device_udid,
+        work_dir=str(work_dir),
+        state_dir=str(state_dir),
         enable_capability=args.enable_capability,
         force_refresh_token=args.refresh_token,
         force_refresh_signing=args.refresh_signing,
         browser_mode=args.browser,
-        signed_output_dir=args.output_dir,
+        signed_output_dir=str(output_dir),
+        signed_output_path=args.output,
+        overwrite_output=args.overwrite_output,
         keep_signed_hap=True,
         install_after_sign=install_after_sign,
     )
@@ -482,14 +781,49 @@ def _inspect_installed_bundle(serial: str, bundle_name: str) -> dict[str, str]:
 
 
 def _run_sign_or_deploy(args: argparse.Namespace) -> int:
+    if args.overwrite_output and not args.output:
+        raise ValueError("--overwrite-output 必须与 --output 一起使用")
     hap_path = _resolve_hap(args.hap)
     bundle_name = args.bundle_name or detect_bundle_name(str(hap_path))
     input_signed = is_hap_signed(hap_path)
+    if args.output:
+        output_path = Path(args.output).expanduser().resolve()
+        if output_path.exists() and not args.overwrite_output:
+            raise ValueError(
+                f"签名输出已存在：{output_path}；如需覆盖请显式传入 --overwrite-output"
+            )
     deploy = args.command == "deploy"
+    state_dir, work_dir, output_dir = _resolved_bundle_paths(args, bundle_name)
+    migration_warnings: list[dict[str, object]] = []
+    if not input_signed:
+        candidates = (
+            legacy_state_warning(
+                state_dir,
+                work_dir,
+                bundle_name=bundle_name,
+            ),
+            cache_compatibility_warning(
+                work_dir / "metadata.json",
+                bundle_name=bundle_name,
+                enable_capability=args.enable_capability,
+            ),
+        )
+        for warning in candidates:
+            if warning is not None:
+                migration_warnings.append(warning)
+                logging.warning(
+                    "[%s] %s；整改说明：%s",
+                    warning["id"],
+                    warning["summary"],
+                    warning["remediation"],
+                )
     pipeline = _build_sign_pipeline(
         args,
         hap_path,
         bundle_name,
+        state_dir=state_dir,
+        work_dir=work_dir,
+        output_dir=output_dir,
         install_after_sign=deploy,
     )
     if not pipeline.run():
@@ -500,14 +834,33 @@ def _run_sign_or_deploy(args: argparse.Namespace) -> int:
         return EXIT_OPERATION_FAILED
 
     signed_hap = str(Path(pipeline.signed_hap_path).resolve())
+    requested_capability_mode = None
+    capability_mode = None
+    capability_fallback = False
+    if not input_signed:
+        requested_capability_mode = (
+            "system-basic" if args.enable_capability else "normal"
+        )
+        capability_mode = "system-basic" if pipeline.enable_capability else "normal"
+        capability_fallback = requested_capability_mode != capability_mode
     payload: dict[str, object] = {
         "ok": True,
         "command": args.command,
         "message": "签名并安装成功" if deploy else "签名成功",
         "bundle_name": bundle_name,
-        "serial": args.serial,
+        "serial": args.serial or "",
         "input_hap": str(hap_path),
         "input_signed": input_signed,
+        "browser_mode": args.browser,
+        "requested_capability_mode": requested_capability_mode,
+        "capability_mode": capability_mode,
+        "capability_fallback": capability_fallback,
+        "migration_warnings": migration_warnings,
+        "paths": {
+            "state_dir": str(state_dir),
+            "work_dir": str(work_dir),
+            "output_dir": str(output_dir),
+        },
         "signed_hap": signed_hap,
         "installed": deploy,
     }
@@ -556,6 +909,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     _configure_logging(args.verbose)
 
     try:
+        if args.command == "doctor":
+            return _run_doctor(args)
+        if args.command == "inspect":
+            return _run_inspect(args)
+        if args.command == "migrate-cache":
+            return _run_migrate_cache(args)
         if args.command == "auth":
             return _run_auth(args)
         if args.command == "devices":

@@ -426,6 +426,41 @@ def test_listener_pid_returns_none_when_port_free(monkeypatch) -> None:
     assert installer._listener_pid() is None
 
 
+def test_linux_proc_fallback_finds_hdc_listener(tmp_path, monkeypatch) -> None:
+    proc_root = tmp_path / "proc"
+    net = proc_root / "net"
+    descriptor_dir = proc_root / "47024" / "fd"
+    net.mkdir(parents=True)
+    descriptor_dir.mkdir(parents=True)
+    (descriptor_dir / "7").write_text("descriptor", encoding="ascii")
+    (net / "tcp").write_text(
+        "sl local_address rem_address st tx_queue tm->when retrnsmt uid timeout inode\n"
+        "0: 0100007F:2206 00000000:0000 0A 00000000:00000000 "
+        "00:00000000 00000000 1000 0 12345\n",
+        encoding="ascii",
+    )
+    (net / "tcp6").write_text("header\n", encoding="ascii")
+    monkeypatch.setattr(installer.os, "readlink", lambda _path: "socket:[12345]")
+
+    assert installer._listener_pid_linux_proc(proc_root) == 47024
+
+
+def test_linux_proc_start_time_is_locale_independent(tmp_path, monkeypatch) -> None:
+    proc_root = tmp_path / "proc"
+    process = proc_root / "47024"
+    process.mkdir(parents=True)
+    fields_after_comm = ["S"] + ["0"] * 19
+    fields_after_comm[19] = "500"
+    (process / "stat").write_text(
+        f"47024 (hdc server) {' '.join(fields_after_comm)}\n",
+        encoding="ascii",
+    )
+    (proc_root / "stat").write_text("cpu 1 2 3\nbtime 1000\n", encoding="ascii")
+    monkeypatch.setattr(installer.os, "sysconf", lambda _name: 100, raising=False)
+
+    assert installer._process_start_time_linux_proc(47024, proc_root) == 1005.0
+
+
 def test_generate_keypair_builds_command(monkeypatch, tmp_path) -> None:
     run = Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(keytool_util, "run_process", run)

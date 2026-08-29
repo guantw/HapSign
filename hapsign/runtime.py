@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,9 +59,18 @@ class ToolchainPaths:
     hdc: Path
     source: str
 
-    def missing(self, *, require_signing: bool = True) -> list[str]:
-        """返回缺少的工具；已签名 HAP 只要求 HDC。"""
-        required = [("HDC", self.hdc)]
+    def missing(
+        self,
+        *,
+        require_signing: bool = True,
+        require_hdc: bool = True,
+    ) -> list[str]:
+        """返回缺少或不可执行的工具。
+
+        ``require_hdc=False`` 用于仅签名且调用方已经提供设备 UDID，或复用已有
+        Profile 的场景。默认值保持旧版“签名并安装”的检查语义。
+        """
+        required = [("HDC", self.hdc)] if require_hdc else []
         if require_signing:
             required.extend(
                 [
@@ -69,7 +79,17 @@ class ToolchainPaths:
                     ("hap-sign-tool.jar", self.hap_sign_tool),
                 ]
             )
-        return [f"{name}: {path}" for name, path in required if not path.is_file()]
+        problems: list[str] = []
+        for name, path in required:
+            if not path.is_file():
+                problems.append(f"{name}: {path}")
+            elif (
+                name != "hap-sign-tool.jar"
+                and os.name != "nt"
+                and not os.access(path, os.X_OK)
+            ):
+                problems.append(f"{name}: {path}（文件不可执行）")
+        return problems
 
 
 def _executable_name(name: str) -> str:
@@ -142,10 +162,41 @@ def _deveco_home_candidates() -> list[tuple[Path, str]]:
         candidates.extend(
             [
                 (Path("/opt/DevEco-Studio"), "DevEco Studio"),
+                (Path("/opt/Huawei/DevEco-Studio"), "DevEco Studio"),
                 (Path.home() / "DevEco-Studio", "DevEco Studio"),
+                (Path.home() / "Huawei" / "DevEco-Studio", "DevEco Studio"),
             ]
         )
     return candidates
+
+
+def _from_path_environment() -> ToolchainPaths:
+    """从 JAVA_HOME、PATH 和签名器环境变量组合源码运行工具链。"""
+
+    runtime_bin = None
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        runtime_bin = Path(java_home).expanduser() / "bin"
+
+    def command(name: str) -> Path:
+        executable = _executable_name(name)
+        if runtime_bin is not None and name in {"java", "keytool"}:
+            candidate = runtime_bin / executable
+            if candidate.is_file():
+                return candidate
+        discovered = shutil.which(executable)
+        return Path(discovered) if discovered else Path(executable)
+
+    signer = os.environ.get("HAPSIGN_HAP_SIGN_TOOL")
+    return ToolchainPaths(
+        java=command("java"),
+        keytool=command("keytool"),
+        hap_sign_tool=(
+            Path(signer).expanduser() if signer else Path("hap-sign-tool.jar")
+        ),
+        hdc=command("hdc"),
+        source="JAVA_HOME/PATH",
+    )
 
 
 def _with_direct_overrides(paths: ToolchainPaths) -> ToolchainPaths:
@@ -153,21 +204,32 @@ def _with_direct_overrides(paths: ToolchainPaths) -> ToolchainPaths:
         value = os.environ.get(name)
         return Path(value).expanduser() if value else current
 
+    overrides = {
+        name
+        for name in (
+            "HAPSIGN_JAVA",
+            "HAPSIGN_KEYTOOL",
+            "HAPSIGN_HAP_SIGN_TOOL",
+            "HAPSIGN_HDC",
+        )
+        if os.environ.get(name)
+    }
     return ToolchainPaths(
         java=override("HAPSIGN_JAVA", paths.java),
         keytool=override("HAPSIGN_KEYTOOL", paths.keytool),
         hap_sign_tool=override("HAPSIGN_HAP_SIGN_TOOL", paths.hap_sign_tool),
         hdc=override("HAPSIGN_HDC", paths.hdc),
-        source=paths.source,
+        source="environment overrides" if overrides else paths.source,
     )
 
 
 def discover_toolchain() -> ToolchainPaths:
-    """优先发现便携资源，其次查找本机 DevEco Studio。"""
+    """发现便携资源、DevEco Studio，最后组合 JAVA_HOME/PATH。"""
     candidates = [_from_portable_resources()]
     candidates.extend(
         _from_deveco_home(home, source) for home, source in _deveco_home_candidates()
     )
+    candidates.append(_from_path_environment())
 
     overridden = [_with_direct_overrides(item) for item in candidates]
     complete = next((item for item in overridden if not item.missing()), None)

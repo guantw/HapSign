@@ -5,7 +5,8 @@ Profile、设备 UDID 或签名后的 HAP 加入仓库。
 
 ## 开发环境
 
-项目要求 Windows 或 macOS，以及 Python 3.11 或更高版本。创建并激活虚拟环境后安装开发依赖：
+项目支持 Windows、Linux 和 macOS，要求 Python 3.11 或更高版本。创建并激活
+虚拟环境后安装开发依赖：
 
 ```bash
 python -m pip install -r requirements-dev.txt
