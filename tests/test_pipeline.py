@@ -166,14 +166,17 @@ def test_custom_state_dir_owns_token_cache(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "signing_files" / ".token_cache.json").exists()
 
 
-def test_expired_token_cache_is_ignored(tmp_path, monkeypatch) -> None:
+def test_older_token_cache_is_reused_until_server_rejects(
+    tmp_path, monkeypatch
+) -> None:
     pipeline = _pipeline(tmp_path, monkeypatch)
     cache_path = tmp_path / "signing_files" / ".token_cache.json"
     cache_path.parent.mkdir()
+    creation_date = (date.today() - timedelta(days=1)).isoformat()
     cache_path.write_text(
         json.dumps(
             {
-                "creation_date": (date.today() - timedelta(days=1)).isoformat(),
+                "creation_date": creation_date,
                 "access_token": "access",
                 "user_id": "user",
                 "jwt_token": "jwt",
@@ -182,7 +185,11 @@ def test_expired_token_cache_is_ignored(tmp_path, monkeypatch) -> None:
         encoding="utf-8",
     )
 
-    assert pipeline._load_token_cache() is None
+    cache = pipeline._load_token_cache()
+
+    assert cache is not None
+    assert cache["creation_date"] == creation_date
+    assert cache["access_token"] == "access"
 
 
 def test_token_cache_without_jwt_is_ignored(tmp_path, monkeypatch) -> None:
@@ -279,8 +286,9 @@ def test_authenticate_reuses_token_without_browser_or_device(
     tmp_path, monkeypatch
 ) -> None:
     pipeline = _pipeline(tmp_path, monkeypatch)
+    creation_date = (date.today() - timedelta(days=1)).isoformat()
     cache = {
-        "creation_date": date.today().isoformat(),
+        "creation_date": creation_date,
         "access_token": "access",
         "refresh_token": "refresh",
         "user_id": "user",
@@ -305,7 +313,7 @@ def test_authenticate_reuses_token_without_browser_or_device(
     assert result == {
         "authenticated": True,
         "from_cache": True,
-        "creation_date": date.today().isoformat(),
+        "creation_date": creation_date,
     }
     init_client.assert_called_once_with(cache)
 

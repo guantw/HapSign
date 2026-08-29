@@ -80,6 +80,8 @@
 
 ### Changed
 
+- Token 缓存不再按创建日期主动失效；签名或 Profile 申请实际被服务端以 Token 失效
+  拒绝时才尝试刷新，跨天申请签名材料也会先复用现有 Token。
 - CLI 现在必须显式使用 `doctor`、`inspect`、`migrate-cache`、`auth`、`devices`、
   `sign`、`install` 或 `deploy` 子命令。`deploy`/`install` 必须传入非空
   `--serial`；`sign` 可使用 `--serial`、可信的显式 `--device-udid`，或复用兼容的

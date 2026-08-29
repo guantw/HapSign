@@ -219,11 +219,12 @@ hapsign deploy --hap path/to/app-unsigned.hap --serial <serial> --json
 `connected=true` 的目标，优先选择 `physical_candidate=true` 的 USB 真机，再把其
 `serial` 原样传给后续命令。`serial` 是 HDC 连接标识，不是签名 Profile 中的 UDID。
 
-`auth` 可以单独调用并持久化当天 Token。同一份 Token 缓存不绑定目标设备，在同一
+`auth` 可以单独调用并持久化 Token。同一份 Token 缓存不绑定目标设备，在同一
 台运行 HapSign 的电脑上可继续给不同 HarmonyOS 手机、平板或 PC 目标签名；每台
 目标设备的 Profile 仍绑定自己的 UDID，切换设备会重新申请 Profile。Token 不会在
-多台运行 HapSign 的电脑之间自动同步，也不建议手工复制缓存。`auth status` 只检查
-本地当日缓存，因此 JSON 中 `online_verified` 固定为 `false`。
+多台运行 HapSign 的电脑之间自动同步，也不建议手工复制缓存。Token 缓存不会按日期
+主动失效；只有携带 Token 的 API 请求被服务端拒绝时才会尝试刷新。`auth status` 只
+检查本地缓存，因此 JSON 中 `online_verified` 固定为 `false`。
 
 ### Agent / 半自动仅签名
 
@@ -411,13 +412,13 @@ signed_haps/
 
 ## 缓存策略
 
-同一天内不会重复登录；签名文件只在 bundle 和目标 UDID 都相同时复用：
+Token 缓存持续复用；签名文件只在当天且 bundle 和目标 UDID 都相同时复用：
 
-- **Token 缓存**：`<state-dir>/.token_cache.json`，当天可跨目标设备复用
+- **Token 缓存**：`<state-dir>/.token_cache.json`，不按日期失效，可跨目标设备复用
 - **签名文件缓存**：`<state-dir>/{bundle_name}/metadata.json`，当天仅为匹配的
   bundle 和设备 UDID 复用
-- 跨天自动失效，重新走完整流程
-- Token 失效时自动刷新，刷新失败才回退到重新登录
+- 跨天仅签名文件缓存失效，申请新材料时仍先复用已有 Token
+- 携带 Token 的 API 请求被服务端判定失效时自动刷新，刷新失败才回退到重新登录
 
 这些文件包含敏感信息。Windows token 缓存使用当前用户 DPAPI 保护；Linux/macOS
 token 缓存是权限限制为 `0o600` 的明文文件，签名私钥等材料仍需按敏感文件保护。

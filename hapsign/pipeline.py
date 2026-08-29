@@ -1,13 +1,13 @@
 """登录、token 交换、签名材料申请、HAP 签名和安装的全流程编排。
 
-双重缓存策略（同一天内复用，避免反复登录和申请）：
-  1. Token 缓存：``~/.hapsign/.token_cache.json`` 存储当天登录的 token 信息，
-     同账号同一天内复用，不重新登录。
+双重缓存策略（避免反复登录和申请）：
+  1. Token 缓存：``~/.hapsign/.token_cache.json`` 存储登录后的 token 信息，
+     不按日期主动失效；仅在使用 token 的 API 请求被服务端拒绝时尝试刷新。
   2. 签名文件缓存：``~/.hapsign/{bundle_name}/metadata.json`` 存储当天申请的
      签名文件路径，同一天内复用，不重新申请证书/设备/Profile。
 
 缓存失效场景：
-  - 跨天：token 和签名文件缓存都失效，重新登录 + 重新申请。
+  - 跨天：签名文件缓存失效并重新申请；Token 缓存仍会先尝试复用。
   - token 过期：缓存 token 用不了时自动刷新；刷新也失败则回退到重新登录。
   - 签名文件缺失：重新申请（用缓存 token，不重新登录）。
 """
@@ -184,11 +184,12 @@ class SignPipeline:
     # ── Token 缓存 ──────────────────────────────────────────────
 
     def _load_token_cache(self) -> dict | None:
-        """加载当天的 token 缓存。
+        """加载 token 缓存。
 
-        条件：缓存存在、creation_date 是今天；缓存可能是 Windows DPAPI 加密格式
-        或受限权限的明文 JSON。Windows 上的明文缓存首次读取时迁移为加密格式；
-        其他平台继续使用 0o600 明文缓存。解密失败视为无缓存，回退重新登录。
+        缓存不按 creation_date 主动失效；只有使用 token 的 API 请求被服务端拒绝
+        时才尝试刷新。缓存可能是 Windows DPAPI 加密格式或受限权限的明文 JSON。
+        Windows 上的明文缓存首次读取时迁移为加密格式；其他平台继续使用 0o600
+        明文缓存。解密失败视为无缓存，回退重新登录。
         """
         if not os.path.exists(self._token_cache_path):
             return None
@@ -226,9 +227,6 @@ class SignPipeline:
             logger.warning("[cache] token 缓存格式无效，将重新登录")
             return None
 
-        if cache.get("creation_date") != date.today().isoformat():
-            logger.info("[cache] token 缓存非今日，跳过")
-            return None
         if (
             not cache.get("access_token")
             or not cache.get("user_id")
@@ -484,7 +482,7 @@ class SignPipeline:
             else:
                 token_cached = None
             if token_cached:
-                logger.info("[cache] 当天 token 已缓存，跳过登录")
+                logger.info("[cache] token 已缓存，跳过登录")
                 self._init_client_from_cache(token_cached)
             else:
                 # 没有缓存 token，需要登录
@@ -610,7 +608,7 @@ class SignPipeline:
         self._provision_api = ProvisionAPI(self._client)
         self._capability_api = CapabilityAPI(self._client)
 
-        # 保存 token 缓存，供同一天内复用
+        # 保存 token 缓存，后续持续复用，直到服务端拒绝后触发刷新
         return self._save_token_cache()
 
     def authenticate(self, force_refresh: bool = False) -> dict[str, object]:
