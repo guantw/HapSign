@@ -61,22 +61,22 @@ platform/product or architecture is a hard failure.
 
 ## Output names
 
-For `v0.2.0-rc.1`, expected binary assets are:
+For `v0.2.0-rc.2`, expected binary assets are:
 
 ```text
-HapSign-GUI-v0.2.0-rc.1-windows-x64.zip
-HapSign-CLI-ExternalToolchain-v0.2.0-rc.1-windows-x64.zip
-HapSign-CLI-Portable-v0.2.0-rc.1-windows-x64.zip
-HapSign-CLI-ExternalToolchain-v0.2.0-rc.1-linux-x64.tar.gz
-HapSign-CLI-Portable-v0.2.0-rc.1-linux-x64.tar.gz
-HapSign-CLI-ExternalToolchain-v0.2.0-rc.1-macos-arm64.zip
+HapSign-GUI-v0.2.0-rc.2-windows-x64.zip
+HapSign-CLI-ExternalToolchain-v0.2.0-rc.2-windows-x64.zip
+HapSign-CLI-Portable-v0.2.0-rc.2-windows-x64.zip
+HapSign-CLI-ExternalToolchain-v0.2.0-rc.2-linux-x64.tar.gz
+HapSign-CLI-Portable-v0.2.0-rc.2-linux-x64.tar.gz
+HapSign-CLI-ExternalToolchain-v0.2.0-rc.2-macos-arm64.zip
 ```
 
 Linux uses tar.gz to preserve executable bits. The publish job then renders:
 
 ```text
-HapSign-Prompt-ExternalToolchain-v0.2.0-rc.1.md
-HapSign-Prompt-Portable-v0.2.0-rc.1.md
+HapSign-Prompt-ExternalToolchain-v0.2.0-rc.2.md
+HapSign-Prompt-Portable-v0.2.0-rc.2.md
 release-manifest.json
 SHA256SUMS
 ```

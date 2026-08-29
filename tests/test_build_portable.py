@@ -188,6 +188,26 @@ def test_python_dependency_licenses_are_copied(tmp_path, monkeypatch) -> None:
     )
 
 
+def test_python_license_search_supports_cpython_license_without_extension(
+    tmp_path,
+) -> None:
+    python_root = tmp_path / "python"
+    python_root.mkdir()
+    expected = python_root / "LICENSE"
+    expected.write_text("Python license\n", encoding="utf-8")
+
+    assert build_portable._find_python_runtime_license(python_root) == expected
+
+
+def test_python_license_search_supports_macos_framework_rtf(tmp_path) -> None:
+    python_root = tmp_path / "Python.framework" / "Versions" / "3.13"
+    expected = python_root / "Resources" / "English.lproj" / "License.rtf"
+    expected.parent.mkdir(parents=True)
+    expected.write_text(r"{\rtf1 Python license}", encoding="utf-8")
+
+    assert build_portable._find_python_runtime_license(python_root) == expected
+
+
 def test_runtime_license_list_covers_playwright_core_dependencies() -> None:
     listed = {
         build_portable._normalize_distribution_name(name)

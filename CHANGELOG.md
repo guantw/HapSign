@@ -29,7 +29,7 @@
   DevEco/SDK/PATH 来源，Portable 使用锁定公共工具链。GUI 内置 Chromium 和工具链。
 - 新增 `build-info --json` 协议、`BUILD_INFO.json`、完整 Release manifest、SHA256SUMS、
   GitHub provenance attestation，以及 External Toolchain/Portable 两组版本化一键 Prompt。
-- 新增 tag 驱动的 GitHub Release 工作流；`v0.2.0-rc.1` 等 RC 自动发布为 prerelease，
+- 新增 tag 驱动的 GitHub Release 工作流；`v0.2.0-rc.N` 格式的 RC 自动发布为 prerelease，
   缺少任一平台资产会阻止整批发布。
 - 官方 Windows/macOS 二进制明确不使用可信发布者身份或 notarization；macOS arm64 仅
   保留系统强制的无身份 ad-hoc 签名。Release、manifest、包元数据和 Prompt 均披露该

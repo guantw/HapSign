@@ -329,15 +329,48 @@ def _copy_python_license_files(
                 f"{canonical_name} distribution; see THIRD_PARTY_NOTICES.md."
             )
 
-    python_license = Path(sys.base_prefix) / "LICENSE.txt"
-    if not python_license.is_file():
-        raise RuntimeError(f"无法找到 Python 运行时许可文件: {python_license}")
-    shutil.copy2(python_license, license_root / "PYTHON-LICENSE.txt")
+    python_license = _find_python_runtime_license()
+    destination_suffix = ".rtf" if python_license.suffix.lower() == ".rtf" else ".txt"
+    shutil.copy2(
+        python_license,
+        license_root / f"PYTHON-LICENSE{destination_suffix}",
+    )
 
     (license_root / "DISTRIBUTIONS.txt").write_text(
         "\n".join(manifest) + "\n",
         encoding="utf-8",
     )
+
+
+def _python_runtime_license_candidates(base_prefix: Path) -> tuple[Path, ...]:
+    """返回受支持的 CPython 发行布局中的许可文件候选项。"""
+    python_series = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    return (
+        # Windows python.org / setup-python distribution.
+        base_prefix / "LICENSE.txt",
+        # CPython source and setup-python Linux distribution.
+        base_prefix / "LICENSE",
+        base_prefix / "LICENSE.rtf",
+        # python.org macOS framework distribution.
+        base_prefix / "Resources" / "License.rtf",
+        base_prefix / "Resources" / "English.lproj" / "License.rtf",
+        # Common distro-style layouts. These are explicit to avoid copying an
+        # unrelated package license through a recursive filesystem search.
+        base_prefix / "share" / "doc" / python_series / "LICENSE",
+        base_prefix / "share" / "doc" / python_series / "copyright",
+        base_prefix / "lib" / python_series / "LICENSE.txt",
+    )
+
+
+def _find_python_runtime_license(base_prefix: Path | None = None) -> Path:
+    """查找当前冻结用 CPython 的许可；找不到时列出已检查路径。"""
+    root = base_prefix or Path(sys.base_prefix)
+    candidates = _python_runtime_license_candidates(root)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    searched = "\n".join(f"- {candidate}" for candidate in candidates)
+    raise RuntimeError(f"无法找到 Python 运行时许可文件，已检查：\n{searched}")
 
 
 def _copy_release_documents(portable_root: Path) -> None:
