@@ -10,7 +10,7 @@ vulnerability reporting；启用后请使用仓库 Security 页的“Report a vu
 
 ## 本地敏感数据
 
-桌面、便携版和 CLI 默认会按应用配置在程序目录的 `signing_files/` 中保存当日 token
+桌面、便携版和 CLI 默认会按应用配置在程序目录的 `signing_files/` 中保存 token
 缓存、调试证书、Profile 和 `.p12` 密钥库；CLI 可用 `--state-dir` 或
 `HAPSIGN_SIGNING_DIR` 覆盖。此默认值不依赖启动命令时的工作目录。这些文件已被
 `.gitignore` 排除，但仍是本机敏感

@@ -204,7 +204,7 @@ def _add_signing_options(
     parser.add_argument(
         "--refresh-token",
         action="store_true",
-        help="删除当日 Token 缓存并重新浏览器认证，同时刷新签名材料",
+        help="删除 Token 缓存并重新浏览器认证，同时刷新签名材料",
     )
     parser.add_argument(
         "--refresh-signing",
@@ -293,7 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=_formatter,
         epilog="""\
 示例:
-  hapsign auth --json                 # 有当日缓存则复用，否则打开浏览器
+  hapsign auth --json                 # 有缓存则复用，否则打开浏览器
   hapsign auth --refresh --json       # 强制重新浏览器认证
   hapsign auth status --json          # 只检查本地缓存，不验证服务端有效性
 """,
@@ -353,7 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "为 --serial/--device-udid 对应设备生成 debug Profile 并签名；"
             "未指定设备时可复用兼容缓存或从当前 HDC 目标读取 UDID。"
-            "已有当日 Auth Token 会复用；"
+            "已有 Auth Token 会复用；"
             "同一 bundle 切换设备时会自动丢弃不匹配的 Profile 缓存。"
         ),
         formatter_class=_formatter,
@@ -695,9 +695,7 @@ def _run_auth(args: argparse.Namespace) -> int:
                 "ok": True,
                 "command": "auth status",
                 "message": (
-                    "发现当日认证缓存"
-                    if status["authenticated"]
-                    else "没有可用的当日认证缓存"
+                    "发现认证缓存" if status["authenticated"] else "没有可用的认证缓存"
                 ),
                 "cache_format": _cache_format(str(status["cache_path"])),
             }
