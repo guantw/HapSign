@@ -48,7 +48,10 @@ def user_local_data_dir() -> Path:
 
 
 def signing_files_dir(settings: AppSettings) -> Path:
-    """按设置返回签名材料、缓存和签名后 HAP 的目录。"""
+    """按专用环境变量、数据根目录和桌面设置返回签名状态目录。"""
+    signing_override = os.environ.get("HAPSIGN_SIGNING_DIR")
+    if signing_override:
+        return Path(signing_override).expanduser().resolve()
     override = os.environ.get("HAPSIGN_DATA_DIR")
     if override:
         return Path(override).expanduser().resolve() / "signing_files"
@@ -65,7 +68,10 @@ def log_directory() -> Path:
 
 
 def signed_haps_dir() -> Path:
-    """最终签名 HAP 始终位于程序目录，不随签名材料设置变化。"""
+    """返回默认签名产物目录，允许用专用环境变量覆盖。"""
+    override = os.environ.get("HAPSIGN_SIGNED_HAPS_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
     return application_dir() / "signed_haps"
 
 

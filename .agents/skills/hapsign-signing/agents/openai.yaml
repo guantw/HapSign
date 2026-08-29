@@ -1,0 +1,7 @@
+interface:
+  display_name: "HapSign HAP Signing"
+  short_description: "Inspect, debug-sign, and install HarmonyOS HAPs"
+  default_prompt: "Use $hapsign-signing to inspect and debug-sign this authorized HarmonyOS HAP."
+
+policy:
+  allow_implicit_invocation: true

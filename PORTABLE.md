@@ -1,6 +1,7 @@
 # HapSign 便携版
 
-解压 ZIP 后双击 `HapSign.exe`（macOS/Linux 使用对应平台可执行文件）。
+解压下载归档后双击 `HapSign.exe`（macOS/Linux 使用对应平台的 `HapSign`）。目录中
+另有 `hapsign-cli.exe`/`hapsign-cli`，供脚本和 agent 使用机器可读签名协议。
 
 ## 使用方法
 
@@ -10,6 +11,17 @@
 4. 点击“开始签名并安装”。
 5. 如果 HAP 尚未签名，程序会控制系统 Edge（其次 Chrome）打开华为登录页；
    完成登录后程序会继续。
+
+仅签名或自动化辅助可在终端运行：
+
+```bash
+./hapsign-cli doctor --json
+./hapsign-cli sign --hap app.hap --output app-signed.hap \
+  --browser system_controlled --json
+```
+
+Windows PowerShell 使用 `.\hapsign-cli.exe`。完整约定见 `AGENT_SIGNING.md`；升级
+已有安装前请查看 `MIGRATIONS.md`，或读取 `doctor --json` 的机器可读变更目录。
 
 进度条按当前实际流程阶段推进。任务执行期间可以点击“取消”；如果直接关闭窗口，
 程序会询问是否中断当前任务。确认后会先结束登录等待或外部工具、清理本次启动的
@@ -48,8 +60,8 @@ Java、keytool 和 HDC 等外部命令会在后台执行，不会弹出命令行
 ## 构建
 
 构建机需要 Python 3.11+。目标电脑不需要安装 Python 或 DevEco Studio；默认
-精简包要求目标 Windows 已安装 Edge 或 Chrome。正式 Windows 构建先准备锁定的
-OpenHarmony/Temurin 工具链：
+精简包要求目标系统已安装 Edge 或 Chrome。正式 Windows/Linux x64 构建先在目标
+平台准备锁定的 OpenHarmony/Temurin 工具链：
 
 ```bash
 python -m pip install -e ".[gui,bundle]"
@@ -65,9 +77,9 @@ python -m playwright install --no-shell chromium
 python scripts/build_portable.py --keep-bundled-browser
 ```
 
-构建结果位于 `dist/HapSign-portable-<platform>.zip`，同目录会生成可用于发布校验的
-`.zip.sha256` 文件。
-兼容包位于 `dist/HapSign-portable-<platform>-compat.zip`。
+Windows/macOS 构建结果位于 `dist/HapSign-portable-<platform>.zip`；Linux 使用
+`dist/HapSign-portable-linux.tar.gz` 以保留可执行位。同目录会生成对应的
+`.sha256` 校验文件。兼容包沿用相同平台格式，并在文件名中增加 `-compat`。
 准备脚本使用 `jlink` 生成精简 Temurin 运行时，构建脚本会自动执行 Java、
 keytool、hap-sign-tool、HDC 和冻结程序自检。
 
@@ -77,14 +89,15 @@ keytool、hap-sign-tool、HDC 和冻结程序自检。
 python scripts/build_portable.py --skip-toolchain
 ```
 
-该 GUI-only 包不能在没有外部工具链的电脑上完成签名和安装。完整的构建环境、
+该无工具链 GUI/CLI 包不能在没有外部工具链的电脑上完成签名和安装。完整的构建环境、
 资源发现顺序、目录结构、验证方法和发布清单见 `docs/PACKAGING.md`；生成的便携
 目录中也会包含一份 `BUILDING.md`。
 
 PyInstaller 产物与当前操作系统绑定，因此 Windows、macOS、Linux 需要分别构建。
-锁文件会记录公共 SDK、Temurin 和核心文件哈希；发布包也包含生成时的
+锁文件当前包含 Windows x64 和 Linux x64 的公共 SDK、Temurin 和核心文件哈希；
+发布包也包含生成时的
 `PROVENANCE.txt`、完整 OpenHarmony NOTICE、Temurin legal 目录，以及
-`libusb_shared.dll` 对应的 OpenHarmony 源码快照。若使用
+`libusb_shared.dll`/`libusb_shared.so` 对应的 OpenHarmony 源码快照。若使用
 `--allow-deveco-toolchain` 回退，本次产物只用于本机排障，不得公开发布。
 
 发布包根目录会包含 HapSign 的 `LICENSE`、`PRIVACY.md`、

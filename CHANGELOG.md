@@ -4,14 +4,38 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- `HAPSIGN-BREAKING-001`：旧签名缓存缺少或切换能力模式、包名不匹配或设备 UDID
+  无效时会执行一次性材料刷新；能力模式可通过一致使用 `--enable-capability` 匹配，
+  只有其余一致性校验通过时，才可显式运行
+  `migrate-cache --profile-type normal|system-basic` 保留缓存。
+- `HAPSIGN-BREAKING-002`：CLI 默认浏览器从普通系统 Profile 改为隔离的
+  `system_controlled`；可用 `--browser` 或 `HAPSIGN_BROWSER` 配置。
+- `HAPSIGN-BREAKING-003`：CLI 默认状态/产物从 PR #5 的 `~/.hapsign`（更早版本为
+  进程工作目录）改到应用目录；可用 `--state-dir`、`--output-dir`、
+  `HAPSIGN_SIGNING_DIR` 和 `HAPSIGN_SIGNED_HAPS_DIR` 恢复原路径；`inspect` 会检测
+  可复用的 PR #5 旧状态，并在发现旧签名材料时阻止 agent 静默刷新材料。
+- `HAPSIGN-BREAKING-004`：面向人的 CLI 输出不再作为脚本协议；自动化应使用 `--json`。
+- `HAPSIGN-BREAKING-005`：CLI 改为显式子命令接口；旧的扁平参数调用需要按迁移表整改。
+  完整影响、检测方式与整改命令见 [迁移指南](docs/MIGRATIONS.md)。
+
 ### Added
 
 - 新增面向 Agent 的 `auth`、`devices list`、`sign`、`install`、`deploy` CLI
   子命令；支持单行 JSON stdout、stderr 日志、明确退出码与输入校验。
 - CLI 支持显式 HDC `--serial`、真机/模拟器候选标记、签名与安装分离，以及安装后
   `bm dump` 校验；Token 可跨目标设备复用，Profile 缓存按 UDID 隔离。
-- CLI 默认状态目录改为跨平台用户主目录 `~/.hapsign`，Windows 对应
-  `%USERPROFILE%\.hapsign`，不再受 Agent 当前工作目录影响。
+- Linux 源码命令行、CI、DevEco/JAVA_HOME/PATH 工具发现，以及锁定并校验的
+  OpenHarmony 6.1 + Temurin 21 Linux x64 便携工具链准备流程。
+- Agent 友好的 `doctor`、`inspect`、`migrate-cache`、`--json`、显式 UDID 和
+  精确输出路径；仅签名可复用缓存 Profile 而不连接设备，便携包同时提供独立的
+  `hapsign-cli[.exe]` 控制台程序。
+- 机器可读的兼容性变更目录、按 HAP 检测的迁移警告，以及带备份的旧缓存显式迁移命令。
+- 仓库级 `.agents/skills/hapsign-signing` 全平台 Codex 技能，包含受控浏览器授权、
+  能力判定、签名后复检、输出保护和脱敏回调诊断流程。
+- Linux HDC server 归属探测在缺少 `lsof` 时回退到 `/proc`，进程启动时间读取不受
+  `ps` 输出语言影响。
 - macOS 支持：按平台解析 DevEco JBR / hap-sign-tool / hdc 路径，可用 `hapsign` 命令行签名安装。
 - 可安装的 `hapsign` 命令和标准 Python 项目元数据。
 - Ruff、pytest、覆盖率、pre-commit 和 Windows CI 配置。
@@ -56,9 +80,10 @@
 
 ### Changed
 
-- CLI 现在必须显式使用 `auth`、`devices`、`sign`、`install` 或 `deploy`
-  子命令，并为设备相关命令传入非空 `--serial`；旧的 `hapsign --hap ...`
-  调用方式不再兼容。
+- CLI 现在必须显式使用 `doctor`、`inspect`、`migrate-cache`、`auth`、`devices`、
+  `sign`、`install` 或 `deploy` 子命令。`deploy`/`install` 必须传入非空
+  `--serial`；`sign` 可使用 `--serial`、可信的显式 `--device-udid`，或复用兼容的
+  缓存材料。旧的 `hapsign --hap ...` 调用方式不再兼容。
 
 ### Fixed
 
@@ -67,6 +92,16 @@
   输出误报为空设备列表。
 - CLI 不再把缺少 HDC 可执行文件归类为输入错误；`devices`、`install` 等运行时
   HDC 失败现在返回 `operation_failed` 和退出码 1。
+- CLI 默认使用隔离的 `system_controlled` 浏览器，并把签名缓存与默认输出绑定到应用
+  目录/配置，避免复用普通浏览器 Profile 或因调用工作目录不同而产生多份缓存。
+- 修复 CLI 初始化失败时把 `sign-install` 误报成 `sign`；基础安装现在声明默认受控
+  浏览器所需的 Playwright 运行时依赖；JSON 协议使用 ASCII 转义，避免 Windows
+  本地代码页导致 agent 无法解码中文错误。
+- 签名材料缓存会校验包名、能力模式、已知设备 UDID 和材料文件类型，避免跨设备或
+  跨 Profile 模式误用；显式输出的默认不覆盖门禁也覆盖并发发布竞争。
+- 缓存分别记录请求与实际能力模式，Real Profile 回退到 Test Profile 后可稳定复用；
+  CLI JSON 会显式返回实际模式及 `capability_fallback`，避免 agent 误报 system_basic。
+- 输入已经签名时，`--output` 仍会按不覆盖策略原子发布到指定路径，不再静默忽略。
 - HTTP 客户端正确发送 `User-Agent` / `Accept-Language` 请求头。
 - Token 缓存缺少 `jwt_token` 时不再复用，避免后续刷新失败。
 - 设备注册将业务层重复错误码视为成功，并保留 HTTP 错误信息中的兼容判定。

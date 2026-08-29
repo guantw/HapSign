@@ -7,6 +7,7 @@ import os
 import threading
 import zipfile
 from datetime import date, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -444,6 +445,185 @@ def test_metadata_does_not_store_keystore_password(tmp_path, monkeypatch) -> Non
 
     metadata = json.loads((tmp_path / "signing" / "metadata.json").read_text("utf-8"))
     assert "keystore_password" not in metadata
+    assert metadata["enable_capability"] is False
+    assert metadata["requested_enable_capability"] is False
+
+
+def test_real_profile_fallback_persists_requested_and_effective_modes(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    pipeline = SignPipeline(
+        hap_path="app.hap",
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        enable_capability=True,
+    )
+    pipeline._cert_api = Mock()
+    pipeline._cert_api.get_team_id.return_value = "team"
+    pipeline._capability_api = Mock()
+    pipeline._capability_api.get_app_brief_info.return_value = None
+
+    pipeline._step_get_app_info()
+    pipeline._save_metadata(
+        "key.p12",
+        "cert.cer",
+        "profile.p7b",
+        "team",
+        "oid",
+        "A" * 64,
+    )
+
+    metadata = json.loads(Path(pipeline._metadata_path).read_text(encoding="utf-8"))
+    assert pipeline.requested_enable_capability is True
+    assert pipeline.enable_capability is False
+    assert metadata["requested_enable_capability"] is True
+    assert metadata["enable_capability"] is False
+
+
+def _write_cached_metadata(
+    pipeline: SignPipeline,
+    tmp_path,
+    *,
+    bundle_name: str = "com.example.app",
+    udid: str = "A" * 64,
+    enable_capability: bool = False,
+    requested_enable_capability: bool | None = None,
+) -> None:
+    materials = []
+    for name in ("key.p12", "cert.cer", "profile.p7b"):
+        path = tmp_path / "materials" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"material")
+        materials.append(str(path))
+    metadata = {
+        "creation_date": date.today().isoformat(),
+        "bundle_name": bundle_name,
+        "p12_path": materials[0],
+        "cer_path": materials[1],
+        "p7b_path": materials[2],
+        "udid": udid,
+        "enable_capability": enable_capability,
+    }
+    if requested_enable_capability is not None:
+        metadata["requested_enable_capability"] = requested_enable_capability
+    Path(pipeline._metadata_path).write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+
+
+def test_cached_metadata_must_match_bundle(tmp_path, monkeypatch) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    _write_cached_metadata(pipeline, tmp_path, bundle_name="com.example.other")
+
+    assert pipeline._load_cached_metadata() is None
+
+
+def test_cached_metadata_must_match_requested_capability(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    pipeline = SignPipeline(
+        hap_path="app.hap",
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        enable_capability=True,
+    )
+    _write_cached_metadata(pipeline, tmp_path, enable_capability=False)
+
+    assert pipeline._load_cached_metadata() is None
+
+
+def test_cached_fallback_profile_matches_the_original_real_profile_request(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    pipeline = SignPipeline(
+        hap_path="app.hap",
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        enable_capability=True,
+    )
+    _write_cached_metadata(
+        pipeline,
+        tmp_path,
+        enable_capability=False,
+        requested_enable_capability=True,
+    )
+
+    assert pipeline._load_cached_metadata() is not None
+    assert pipeline.enable_capability is False
+
+    _write_cached_metadata(
+        pipeline,
+        tmp_path,
+        enable_capability=True,
+        requested_enable_capability=False,
+    )
+    assert pipeline._load_cached_metadata() is None
+
+
+def test_legacy_cached_metadata_without_capability_mode_is_not_reused(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    _write_cached_metadata(pipeline, tmp_path)
+    metadata_path = Path(pipeline._metadata_path)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("enable_capability")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    assert pipeline._load_cached_metadata() is None
+
+
+def test_cached_metadata_must_match_known_device(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    pipeline = SignPipeline(
+        hap_path="app.hap",
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        device_udid="B" * 64,
+    )
+    _write_cached_metadata(pipeline, tmp_path, udid="A" * 64)
+
+    assert pipeline._load_cached_metadata() is None
+
+
+def test_cached_metadata_requires_valid_device_udid(tmp_path, monkeypatch) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    _write_cached_metadata(pipeline, tmp_path, udid="unknown")
+
+    assert pipeline._load_cached_metadata() is None
+
+
+def test_cached_metadata_requires_regular_material_files(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    pipeline = _pipeline(tmp_path, monkeypatch)
+    material_directory = tmp_path / "material-directory"
+    material_directory.mkdir()
+    Path(pipeline._metadata_path).write_text(
+        json.dumps(
+            {
+                "creation_date": date.today().isoformat(),
+                "bundle_name": "com.example.app",
+                "p12_path": str(material_directory),
+                "cer_path": str(material_directory),
+                "p7b_path": str(material_directory),
+                "udid": "A" * 64,
+                "enable_capability": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert pipeline._load_cached_metadata() is None
 
 
 def test_metadata_for_another_device_is_ignored(tmp_path, monkeypatch) -> None:
@@ -578,7 +758,10 @@ def test_run_installs_already_signed_hap_directly(tmp_path, monkeypatch) -> None
     pipeline._step_sign_hap.assert_not_called()
 
 
-def test_sign_only_keeps_signed_hap_without_installing(tmp_path, monkeypatch) -> None:
+def test_sign_only_returns_already_signed_hap_without_hdc(
+    tmp_path,
+    monkeypatch,
+) -> None:
     from hapsign import pipeline as pipeline_module
 
     hap = tmp_path / "signed.hap"
@@ -592,24 +775,61 @@ def test_sign_only_keeps_signed_hap_without_installing(tmp_path, monkeypatch) ->
         progress_callback=lambda value, label: values.append((value, label)),
     )
     monkeypatch.setattr(pipeline_module, "is_hap_signed", lambda _path: True)
-    install = Mock(side_effect=AssertionError("sign must not install"))
     monkeypatch.setattr(
         pipeline_module,
         "Installer",
-        lambda **_kwargs: SimpleNamespace(
-            get_udid=lambda: "A" * 64,
-            install=install,
-            close=Mock(),
-        ),
+        Mock(side_effect=AssertionError("HDC should not be used")),
     )
 
     assert pipeline.run() is True
     assert pipeline.signed_hap_path == str(hap)
     assert values[-1] == (100, "签名完成")
-    install.assert_not_called()
 
 
-def test_unsigned_sign_only_omits_install_step(tmp_path, monkeypatch) -> None:
+def test_sign_only_publishes_already_signed_hap_to_explicit_output(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    hap = tmp_path / "signed.hap"
+    hap.write_bytes(b"signed")
+    output = tmp_path / "artifacts" / "published.hap"
+    pipeline = SignPipeline(
+        hap_path=str(hap),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+        signed_output_path=str(output),
+    )
+    monkeypatch.setattr(pipeline_module, "is_hap_signed", lambda _path: True)
+    monkeypatch.setattr(
+        pipeline_module,
+        "Installer",
+        Mock(side_effect=AssertionError("HDC should not be used")),
+    )
+
+    assert pipeline.run() is True
+    assert output.read_bytes() == b"signed"
+    assert pipeline.signed_hap_path == str(output.absolute())
+    assert not list(output.parent.glob("*.tmp.hap"))
+
+    refusing = SignPipeline(
+        hap_path=str(hap),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing-2"),
+        install_after_sign=False,
+        signed_output_path=str(output),
+    )
+    with pytest.raises(FileExistsError, match="输出已存在"):
+        refusing.run()
+    assert output.read_bytes() == b"signed"
+
+
+def test_sign_only_reuses_cached_materials_without_device(
+    tmp_path,
+    monkeypatch,
+) -> None:
     from hapsign import pipeline as pipeline_module
 
     pipeline = SignPipeline(
@@ -619,29 +839,94 @@ def test_unsigned_sign_only_omits_install_step(tmp_path, monkeypatch) -> None:
         install_after_sign=False,
     )
     monkeypatch.setattr(pipeline_module, "is_hap_signed", lambda _path: False)
-    monkeypatch.setattr(pipeline, "_step_check_device", Mock())
     monkeypatch.setattr(
         pipeline,
         "_load_cached_metadata",
-        Mock(
-            return_value={
-                "p12_path": "key.p12",
-                "cer_path": "cert.cer",
-                "p7b_path": "profile.p7b",
-            }
-        ),
+        lambda: {
+            "p12_path": "key.p12",
+            "cer_path": "certificate.cer",
+            "p7b_path": "profile.p7b",
+        },
     )
-    labels = []
+    check_device = Mock(side_effect=AssertionError("device should not be queried"))
+    sign = Mock()
+    install = Mock(side_effect=AssertionError("install should not run"))
+    monkeypatch.setattr(pipeline, "_step_check_device", check_device)
+    monkeypatch.setattr(pipeline, "_step_sign_hap", sign)
+    monkeypatch.setattr(pipeline, "_step_install", install)
 
-    def _capture_steps(steps):
-        labels.extend(label for label, _step in steps)
-        return True
+    assert pipeline.run() is True
+    check_device.assert_not_called()
+    sign.assert_called_once()
+    install.assert_not_called()
 
-    monkeypatch.setattr(pipeline, "_run_steps", _capture_steps)
 
-    assert pipeline._run_pipeline() is True
-    assert labels == ["检测设备连接", "签名 hap"]
-    assert "安装 hap 到设备" not in labels
+def test_sign_only_with_serial_checks_device_before_reusing_cache(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    pipeline = SignPipeline(
+        hap_path=str(tmp_path / "unsigned.hap"),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        serial="device-b",
+        install_after_sign=False,
+    )
+    monkeypatch.setattr(pipeline_module, "is_hap_signed", lambda _path: False)
+    check_device = Mock(side_effect=lambda: setattr(pipeline, "_udid", "B" * 64))
+    load_metadata = Mock(
+        return_value={
+            "p12_path": "key.p12",
+            "cer_path": "certificate.cer",
+            "p7b_path": "profile.p7b",
+        }
+    )
+    monkeypatch.setattr(pipeline, "_step_check_device", check_device)
+    monkeypatch.setattr(pipeline, "_load_cached_metadata", load_metadata)
+    monkeypatch.setattr(pipeline, "_step_sign_hap", Mock())
+
+    assert pipeline.run() is True
+    check_device.assert_called_once()
+    load_metadata.assert_called_once()
+    assert pipeline._udid == "B" * 64
+
+
+def test_sign_only_accepts_explicit_udid_for_new_profile(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    pipeline = SignPipeline(
+        hap_path=str(tmp_path / "unsigned.hap"),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+        device_udid="B" * 64,
+    )
+    monkeypatch.setattr(pipeline_module, "is_hap_signed", lambda _path: False)
+    monkeypatch.setattr(pipeline, "_load_cached_metadata", lambda: None)
+    monkeypatch.setattr(
+        pipeline,
+        "_load_token_cache",
+        lambda: {"access_token": "access", "user_id": "user", "jwt_token": "jwt"},
+    )
+    check_device = Mock(side_effect=AssertionError("device should not be queried"))
+    monkeypatch.setattr(pipeline, "_step_check_device", check_device)
+    for method in (
+        "_step_generate_keypair",
+        "_step_add_certificate",
+        "_step_register_device",
+        "_step_create_provision",
+        "_step_sign_hap",
+    ):
+        monkeypatch.setattr(pipeline, method, Mock())
+
+    assert pipeline.run() is True
+    check_device.assert_not_called()
+    assert pipeline._udid == "B" * 64
 
 
 def test_run_unsigned_hap_does_not_take_signed_shortcut(tmp_path, monkeypatch) -> None:
@@ -811,6 +1096,21 @@ def test_pipeline_reports_stage_progress(tmp_path, monkeypatch) -> None:
     assert values[-1] == (100, "安装完成")
 
 
+def test_sign_only_reports_signing_completion(tmp_path, monkeypatch) -> None:
+    values = []
+    pipeline = SignPipeline(
+        hap_path="app.hap",
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+        progress_callback=lambda value, label: values.append((value, label)),
+    )
+    monkeypatch.setattr(pipeline, "_run_pipeline", Mock(return_value=True))
+
+    assert pipeline.run() is True
+    assert values[-1] == (100, "签名完成")
+
+
 def _prepare_sign_step(pipeline: SignPipeline) -> None:
     pipeline._cer_path = "certificate.cer"
     pipeline._p7b_path = "profile.p7b"
@@ -901,6 +1201,157 @@ def test_failed_signing_preserves_previous_output(tmp_path, monkeypatch) -> None
 
     assert list(output_dir.glob("*.hap")) == [old]
     assert old.read_bytes() == b"old"
+
+
+def test_explicit_output_is_atomic_and_requires_overwrite_opt_in(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    source = tmp_path / "unsigned.hap"
+    source.write_bytes(b"source")
+    output = tmp_path / "artifacts" / "agent-signed.hap"
+
+    class FakeSigner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def sign_hap(self, *_args) -> bool:
+            with open(_args[-1], "wb") as stream:
+                stream.write(b"signed")
+            return True
+
+    monkeypatch.setattr(pipeline_module, "HapSigner", FakeSigner)
+    pipeline = SignPipeline(
+        hap_path=str(source),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+        signed_output_path=str(output),
+    )
+    _prepare_sign_step(pipeline)
+
+    pipeline._step_sign_hap()
+
+    assert output.read_bytes() == b"signed"
+    assert pipeline.signed_hap_path == str(output.absolute())
+    assert not (output.parent / ".hapsign-signed-haps.json").exists()
+    assert not list(output.parent.glob("*.tmp.hap"))
+
+    refusing = SignPipeline(
+        hap_path=str(source),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing-2"),
+        install_after_sign=False,
+        signed_output_path=str(output),
+    )
+    _prepare_sign_step(refusing)
+    with pytest.raises(FileExistsError, match="输出已存在"):
+        refusing._step_sign_hap()
+
+    replacing = SignPipeline(
+        hap_path=str(source),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing-3"),
+        install_after_sign=False,
+        signed_output_path=str(output),
+        overwrite_output=True,
+    )
+    _prepare_sign_step(replacing)
+    replacing._step_sign_hap()
+    assert output.read_bytes() == b"signed"
+
+
+def test_explicit_output_cannot_replace_input(tmp_path) -> None:
+    source = tmp_path / "app.hap"
+
+    with pytest.raises(ValueError, match="不能覆盖输入"):
+        SignPipeline(
+            hap_path=str(source),
+            bundle_name="com.example.app",
+            work_dir=str(tmp_path / "signing"),
+            signed_output_path=str(source),
+        )
+
+
+def test_explicit_output_race_never_overwrites_competing_file(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    source = tmp_path / "unsigned.hap"
+    source.write_bytes(b"source")
+    output = tmp_path / "artifacts" / "agent-signed.hap"
+
+    class FakeSigner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def sign_hap(self, *_args) -> bool:
+            Path(_args[-1]).write_bytes(b"signed")
+            return True
+
+    def competing_publish(_source, destination) -> None:
+        Path(destination).write_bytes(b"competitor")
+        raise FileExistsError(destination)
+
+    monkeypatch.setattr(pipeline_module, "HapSigner", FakeSigner)
+    monkeypatch.setattr(pipeline_module.os, "link", competing_publish)
+    pipeline = SignPipeline(
+        hap_path=str(source),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+        signed_output_path=str(output),
+    )
+    _prepare_sign_step(pipeline)
+
+    with pytest.raises(FileExistsError, match="输出已存在"):
+        pipeline._step_sign_hap()
+
+    assert output.read_bytes() == b"competitor"
+    assert not list(output.parent.glob("*.tmp.hap"))
+
+
+def test_explicit_output_falls_back_when_hard_links_are_unavailable(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from hapsign import pipeline as pipeline_module
+
+    source = tmp_path / "unsigned.hap"
+    source.write_bytes(b"source")
+    output = tmp_path / "artifacts" / "agent-signed.hap"
+
+    class FakeSigner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def sign_hap(self, *_args) -> bool:
+            Path(_args[-1]).write_bytes(b"signed")
+            return True
+
+    monkeypatch.setattr(pipeline_module, "HapSigner", FakeSigner)
+    monkeypatch.setattr(
+        pipeline_module.os,
+        "link",
+        Mock(side_effect=OSError("hard links unsupported")),
+    )
+    pipeline = SignPipeline(
+        hap_path=str(source),
+        bundle_name="com.example.app",
+        work_dir=str(tmp_path / "signing"),
+        install_after_sign=False,
+        signed_output_path=str(output),
+    )
+    _prepare_sign_step(pipeline)
+
+    pipeline._step_sign_hap()
+
+    assert output.read_bytes() == b"signed"
+    assert not list(output.parent.glob("*.tmp.hap"))
 
 
 def test_disabled_signed_hap_retention_uses_temporary_file(

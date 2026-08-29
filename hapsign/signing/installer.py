@@ -5,10 +5,12 @@ from __future__ import annotations
 import datetime
 import logging
 import os
+import platform
 import re
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 from hapsign import config
 from hapsign.subprocess_utils import no_window_kwargs, run_process
@@ -66,7 +68,7 @@ def _listener_pid_windows() -> int | None:
 
 
 def _listener_pid_posix() -> int | None:
-    """POSIX 平台回退使用 lsof 定位监听 8710 的 PID。"""
+    """POSIX 平台优先使用 lsof；Linux 精简环境回退读取 /proc。"""
     try:
         result = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{_HDC_SERVER_PORT}", "-sTCP:LISTEN"],
@@ -75,14 +77,58 @@ def _listener_pid_posix() -> int | None:
             timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    for line in result.stdout.splitlines()[1:]:  # 跳过表头
-        parts = line.split()
-        if len(parts) >= 2:
-            try:
-                return int(parts[1])
-            except ValueError:
+        result = None
+    if result is not None:
+        for line in result.stdout.splitlines()[1:]:  # 跳过表头
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    return int(parts[1])
+                except ValueError:
+                    continue
+    if platform.system() == "Linux":
+        return _listener_pid_linux_proc()
+    return None
+
+
+def _listener_pid_linux_proc(proc_root: Path = Path("/proc")) -> int | None:
+    """不依赖 lsof/ss，从 Linux procfs 查找监听 HDC 端口的当前用户进程。"""
+    socket_inodes: set[str] = set()
+    expected_port = f"{_HDC_SERVER_PORT:04X}"
+    for relative in (Path("net/tcp"), Path("net/tcp6")):
+        try:
+            lines = (proc_root / relative).read_text(encoding="ascii").splitlines()
+        except OSError:
+            continue
+        for line in lines[1:]:
+            fields = line.split()
+            if len(fields) < 10 or fields[3] != "0A":  # TCP_LISTEN
                 continue
+            local = fields[1].rsplit(":", 1)
+            if len(local) == 2 and local[1].upper() == expected_port:
+                socket_inodes.add(fields[9])
+
+    if not socket_inodes:
+        return None
+    try:
+        processes = list(proc_root.iterdir())
+    except OSError:
+        return None
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        try:
+            descriptors = list((process / "fd").iterdir())
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            try:
+                target = os.readlink(descriptor)
+            except OSError:
+                continue
+            match = re.fullmatch(r"socket:\[(\d+)]", target)
+            if match and match.group(1) in socket_inodes:
+                return int(process.name)
     return None
 
 
@@ -138,6 +184,8 @@ def _process_start_time_windows(pid: int) -> float | None:
 
 
 def _process_start_time_posix(pid: int) -> float | None:
+    if platform.system() == "Linux":
+        return _process_start_time_linux_proc(pid)
     try:
         result = subprocess.run(
             ["ps", "-o", "lstart=", "-p", str(pid)],
@@ -155,6 +203,28 @@ def _process_start_time_posix(pid: int) -> float | None:
     except ValueError:
         return None
     return time.mktime(parsed.timetuple())
+
+
+def _process_start_time_linux_proc(
+    pid: int,
+    proc_root: Path = Path("/proc"),
+) -> float | None:
+    """用 Linux 时钟 tick 计算进程 epoch 启动时间，不受 ``ps`` 本地化影响。"""
+    try:
+        stat_text = (proc_root / str(pid) / "stat").read_text(encoding="ascii")
+        # comm 字段允许空格和括号；最后一个 ``) `` 之后从字段 3 开始。
+        fields_after_comm = stat_text.rsplit(") ", 1)[1].split()
+        start_ticks = int(fields_after_comm[19])  # /proc/<pid>/stat field 22
+        boot_line = next(
+            line
+            for line in (proc_root / "stat").read_text(encoding="ascii").splitlines()
+            if line.startswith("btime ")
+        )
+        boot_time = int(boot_line.split()[1])
+        ticks_per_second = int(os.sysconf("SC_CLK_TCK"))
+    except (IndexError, OSError, StopIteration, ValueError):
+        return None
+    return boot_time + start_ticks / ticks_per_second
 
 
 class Installer:

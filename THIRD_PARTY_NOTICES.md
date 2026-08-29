@@ -19,7 +19,7 @@ HapSign 自身的源代码使用 [MIT License](LICENSE)。本文件说明源码�
 | idna | 国际化域名处理 | BSD-3-Clause |
 | PyInstaller bootloader | 生成可执行文件 | GPL-2.0-or-later，带允许分发生成程序的特殊例外 |
 
-Windows 便携版以独立 DLL 的方式携带未修改的 Qt/PySide6 运行库，选择 LGPL-3.0
+便携版以独立动态库的方式携带未修改的 Qt/PySide6 运行库，选择 LGPL-3.0
 路径进行分发。接收者可以用 ABI 兼容的修改版动态库替换
 `_internal/PySide6/` 中相应文件；HapSign 不对调试这种修改施加额外限制。Qt 的
 版权、商标和许可仍归各权利人所有。
@@ -31,7 +31,7 @@ Chromium，还必须保留该目录内 Playwright/Chromium 的第三方声明。
 
 ## 便携工具链
 
-Windows 正式便携版从 `toolchain.lock.json` 锁定的公开上游准备：
+Windows/Linux x64 正式便携版从 `toolchain.lock.json` 锁定的公开上游准备：
 
 | 组件 | 当前版本/来源 | 许可 |
 | --- | --- | --- |
@@ -45,7 +45,7 @@ Windows 正式便携版从 `toolchain.lock.json` 锁定的公开上游准备：
 - `resources/toolchain/<platform>/runtime/legal/`；
 - OpenHarmony 公共 SDK 的完整 `NOTICE.txt`；
 - 下载地址、版本及 SHA-256 的 `PROVENANCE.txt` 和 `toolchain.lock.json`；
-- `licenses/libusb-source/` 中与 DLL 对应的 OpenHarmony libusb 完整源码快照、
+- `licenses/libusb-source/` 中与 libusb 动态库对应的 OpenHarmony libusb 完整源码快照、
   补丁、构建配置和 LGPL 文本。
 
 HapSign 的 MIT 许可只覆盖本项目自身代码，不覆盖这些独立组件。接收者可以按各组件

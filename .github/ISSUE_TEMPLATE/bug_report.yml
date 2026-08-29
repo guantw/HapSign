@@ -23,8 +23,10 @@ body:
       options:
         - Windows 精简便携包
         - Windows Chromium 兼容包
-        - Python 源码 GUI
-        - Python CLI
+        - Linux 便携包
+        - macOS 便携包
+        - Python 源码 GUI（Windows/Linux/macOS）
+        - Python CLI（Windows/Linux/macOS）
         - 其他
     validations:
       required: true

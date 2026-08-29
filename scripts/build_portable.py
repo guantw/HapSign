@@ -1,4 +1,4 @@
-"""构建当前平台的 HapSign 便携版目录和 ZIP。
+"""构建当前平台的 HapSign GUI、agent CLI 便携目录和发布归档。
 
 构建机需要 Python、项目 bundle 依赖以及 prepare_toolchain 生成的公开工具链。
 DevEco 仅作为显式启用的本机兼容回退。
@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -29,6 +30,7 @@ PYTHON_RUNTIME_DISTRIBUTIONS = (
     "playwright",
     "greenlet",  # playwright 的运行时传递依赖
     "pyee",  # playwright 的运行时传递依赖
+    "typing-extensions",  # pyee 的运行时传递依赖
     "requests",
     "urllib3",
     "certifi",
@@ -121,6 +123,53 @@ def _require_playwright_browser() -> None:
 def _run(command: list[str], *, env: dict[str, str]) -> None:
     print("+", subprocess.list2cmdline(command))
     subprocess.run(command, cwd=PROJECT_ROOT, env=env, check=True)
+
+
+def _cli_executable_name() -> str:
+    return "hapsign-cli.exe" if sys.platform == "win32" else "hapsign-cli"
+
+
+def _portable_archive_settings(platform_name: str) -> tuple[str, str]:
+    """返回发布包扩展名和 shutil 格式；Linux 用 tar 保留可执行位。"""
+    if platform_name == "linux":
+        return ".tar.gz", "gztar"
+    return ".zip", "zip"
+
+
+def _build_cli_executable(portable_root: Path, *, env: dict[str, str]) -> Path:
+    """构建 agent 可直接调用的独立控制台程序，并放入 GUI 便携目录。"""
+    cli_dist = PROJECT_ROOT / "build" / "pyinstaller-cli-dist"
+    cli_spec = PROJECT_ROOT / "build" / "pyinstaller-cli-spec"
+    cli_spec.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            "--noconfirm",
+            "--clean",
+            "--onefile",
+            "--console",
+            "--name",
+            "hapsign-cli",
+            "--additional-hooks-dir",
+            str(PROJECT_ROOT / "bundle" / "hooks"),
+            "--distpath",
+            str(cli_dist),
+            "--workpath",
+            str(PROJECT_ROOT / "build" / "pyinstaller-cli"),
+            "--specpath",
+            str(cli_spec),
+            str(PROJECT_ROOT / "main.py"),
+        ],
+        env=env,
+    )
+    source = cli_dist / _cli_executable_name()
+    if not source.is_file():
+        raise RuntimeError(f"PyInstaller 未生成 CLI 程序：{source}")
+    target = portable_root / source.name
+    shutil.copy2(source, target)
+    return target
 
 
 def _sha256(path: Path) -> str:
@@ -286,6 +335,8 @@ def _copy_release_documents(portable_root: Path) -> None:
         "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
         "docs/PACKAGING.md": "BUILDING.md",
         "docs/OPEN_SOURCE_RELEASE.md": "OPEN_SOURCE_RELEASE.md",
+        "docs/AGENT_SIGNING.md": "AGENT_SIGNING.md",
+        "docs/MIGRATIONS.md": "MIGRATIONS.md",
     }
     for source_name, target_name in documents.items():
         shutil.copy2(PROJECT_ROOT / source_name, portable_root / target_name)
@@ -395,10 +446,11 @@ def _copy_local_toolchain(portable_root: Path, *, keep_full_jbr: bool) -> None:
     shutil.copy2(toolchain.hap_sign_tool, lib_dir / "hap-sign-tool.jar")
     shutil.copy2(toolchain.hdc, bin_dir / toolchain.hdc.name)
 
-    # Windows HDC 与同目录的 libusb_shared.dll 配套分发。
-    libusb = toolchain.hdc.parent / "libusb_shared.dll"
-    if libusb.is_file():
-        shutil.copy2(libusb, bin_dir / libusb.name)
+    # 各平台 HDC 与同目录的 libusb 动态库配套分发。
+    for name in ("libusb_shared.dll", "libusb_shared.so", "libusb_shared.dylib"):
+        libusb = toolchain.hdc.parent / name
+        if libusb.is_file():
+            shutil.copy2(libusb, bin_dir / libusb.name)
     notice = toolchain.hdc.parent / "NOTICE.txt"
     if notice.is_file():
         shutil.copy2(notice, target / "NOTICE.txt")
@@ -511,6 +563,44 @@ def _smoke_test_frozen_app(
             )
 
 
+def _smoke_test_frozen_cli(
+    portable_root: Path,
+    *,
+    require_toolchain: bool,
+) -> None:
+    executable = portable_root / _cli_executable_name()
+    version = subprocess.run(
+        [str(executable), "--version"],
+        cwd=portable_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if version.returncode != 0 or "hapsign" not in version.stdout.lower():
+        details = version.stderr.strip() or version.stdout.strip()
+        raise RuntimeError(f"冻结 CLI 版本自检失败：{details}")
+    if not require_toolchain:
+        return
+    doctor = subprocess.run(
+        [str(executable), "doctor", "--json"],
+        cwd=portable_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    try:
+        payload = json.loads(doctor.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"冻结 CLI doctor 未返回有效 JSON：{doctor.stdout.strip()}"
+        ) from exc
+    if doctor.returncode != 0 or payload.get("ok") is not True:
+        details = payload.get("error") or doctor.stderr.strip() or payload
+        raise RuntimeError(f"冻结 CLI 工具链自检失败：{details}")
+
+
 def _remove_smoke_artifacts(portable_root: Path) -> None:
     """避免把构建自检生成的本地日志或运行数据收入发布包。"""
     config = portable_root / "hapsign-config.json"
@@ -554,6 +644,7 @@ def build(
     )
 
     portable_root = DIST_DIR / "HapSign"
+    _build_cli_executable(portable_root, env=env)
     _prune_playwright_extras(
         portable_root,
         keep_bundled_browser=keep_bundled_browser,
@@ -569,22 +660,32 @@ def build(
         portable_root,
         keep_bundled_browser=keep_bundled_browser,
     )
+    _smoke_test_frozen_cli(
+        portable_root,
+        require_toolchain=not skip_toolchain,
+    )
     _remove_smoke_artifacts(portable_root)
 
     sys.path.insert(0, str(PROJECT_ROOT))
     from hapsign.runtime import platform_tag
 
+    platform_name = platform_tag()
     archive_variant = "-compat" if keep_bundled_browser else ""
-    archive_base = DIST_DIR / (f"HapSign-portable-{platform_tag()}{archive_variant}")
-    archive_path = archive_base.with_suffix(".zip")
+    archive_base = DIST_DIR / (f"HapSign-portable-{platform_name}{archive_variant}")
+    archive_extension, archive_format = _portable_archive_settings(platform_name)
+    archive_path = Path(f"{archive_base}{archive_extension}")
     if archive_path.is_file():
         archive_path.unlink()
-    shutil.make_archive(
-        str(archive_base),
-        "zip",
-        root_dir=portable_root.parent,
-        base_dir=portable_root.name,
+    generated_archive = Path(
+        shutil.make_archive(
+            str(archive_base),
+            archive_format,
+            root_dir=portable_root.parent,
+            base_dir=portable_root.name,
+        )
     )
+    if generated_archive != archive_path:
+        raise RuntimeError(f"归档路径与预期不符：{generated_archive} != {archive_path}")
     _write_sha256_file(archive_path)
     return archive_path
 
@@ -594,7 +695,7 @@ def main() -> int:
     parser.add_argument(
         "--skip-toolchain",
         action="store_true",
-        help="只构建 GUI，不复制签名与设备工具链",
+        help="构建 GUI/CLI，但不复制签名与设备工具链",
     )
     parser.add_argument(
         "--keep-full-jbr",

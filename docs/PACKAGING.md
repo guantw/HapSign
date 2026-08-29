@@ -7,7 +7,8 @@ Java、keytool、`hap-sign-tool.jar` 和 HDC 一并复制后压缩成 ZIP。目�
 ## 1. 构建模型
 
 - Windows、macOS、Linux 产物必须分别在对应操作系统构建，不能交叉生成。
-- 当前经过完整构建和启动验证的是 64 位 Windows 版本。
+- 当前经过完整构建、启动和真实设备验证的是 64 位 Windows 版本。Linux x64 已有
+  锁定工具链、准备脚本、CI 和打包路径，发布前仍需在目标发行版完成 GUI/USB 实测。
 - 仓库不保存大型 SDK/JDK 二进制；`toolchain.lock.json` 固定公共上游地址、版本、
   大小和 SHA-256，准备结果放在被 Git 忽略的 `build/`。
 - 默认由 Playwright 控制系统 Edge/Chrome，因此继续拥有本地网络权限和回调控制，
@@ -20,10 +21,10 @@ Java、keytool、`hap-sign-tool.jar` 和 HDC 一并复制后压缩成 ZIP。目�
 完整便携包需要：
 
 1. Python 3.11 或更高版本。
-2. Windows 正式构建需要网络下载锁定的 OpenHarmony 公共 SDK（约 2.5 GB）和
-   Temurin JDK（约 205 MB），或由构建者提供已下载的相同文件。
-3. 首次准备建议至少 6 GB 可用磁盘空间；工具链生成后可删除研究/下载副本，
-   `build/toolchain-prepared/windows` 约 66 MiB。
+2. Windows/Linux x64 正式构建需要网络下载锁定的 OpenHarmony 公共 SDK
+   （约 2.5 GB）和当前平台 Temurin JDK（约 200 MB），或由构建者提供已下载的
+   相同文件。
+3. 首次准备建议至少 6 GB 可用磁盘空间；工具链生成后可删除研究/下载副本。
 
 DevEco Studio 不是正式便携构建的依赖。它仍可用于源码运行和兼容排障；只有显式
 传入 `--allow-deveco-toolchain` 时，构建脚本才会从本机发现并复制它的工具。
@@ -57,7 +58,7 @@ python scripts/prepare_toolchain.py
 
 1. 校验 `toolchain.lock.json`；
 2. 下载并校验 OpenHarmony 6.1 公共 SDK 和 Eclipse Temurin 21；
-3. 只提取 Windows HDC、配套 libusb、hap-sign-tool 及完整 NOTICE；
+3. 只提取当前平台 HDC、配套 libusb、hap-sign-tool 及完整 NOTICE；
 4. 用 `jlink` 生成只含签名器和 keytool 所需模块的 Java runtime；
 5. 附带 libusb 1.0.28 对应的 OpenHarmony 源码快照；
 6. 实际运行 Java、EC keytool、hap-sign-tool 和 HDC 版本自检。
@@ -70,8 +71,8 @@ python scripts/prepare_toolchain.py `
   --jdk-archive D:\cache\OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip
 ```
 
-默认输出是 `build/toolchain-prepared/windows/`。要重建现有输出，显式添加
-`--force`。
+默认输出是 `build/toolchain-prepared/<platform>/`。要重建现有输出，显式添加
+`--force`。Linux JDK 使用锁定的 tar.gz，脚本会安全保留 JDK/HDC 的可执行权限。
 
 ## 5. 生成完整便携包
 
@@ -84,15 +85,17 @@ python scripts/build_portable.py
 脚本会依次：
 
 1. 检查构建机系统 Edge/Chrome 可由 Playwright 正常控制。
-2. 使用 `bundle/hapsign.spec` 构建 `dist/HapSign/`；默认不收集 Chromium。
-3. 复制已校验的公开工具链及其许可、来源和对应源码。
-4. 复制便携版使用说明和本打包指南。
-5. 运行冻结应用自检，并清除自检生成的日志、配置和运行数据。
-6. 生成 `dist/HapSign-portable-<platform>.zip`。
+2. 使用 `bundle/hapsign.spec` 构建 `dist/HapSign/` GUI；默认不收集 Chromium。
+3. 额外生成同目录的单文件控制台程序 `hapsign-cli[.exe]`，供 agent/脚本调用。
+4. 复制已校验的公开工具链及其许可、来源和对应源码。
+5. 复制便携版使用说明和本打包指南。
+6. 运行 GUI、CLI 和工具链自检，并清除自检生成的日志、配置和运行数据。
+7. Windows/macOS 生成 `dist/HapSign-portable-<platform>.zip`；Linux 生成
+   `dist/HapSign-portable-linux.tar.gz`，避免解压时丢失可执行位。
 
-Windows 正式构建使用 Temurin `jlink` runtime 并复用系统 Edge/Chrome。每次构建
-都会实际启动冻结版受控系统浏览器，并运行 Java、hap-sign-tool 和 keytool 密钥
-生成自检；任一失败便终止构建。
+Windows/Linux 正式构建使用 Temurin `jlink` runtime 并复用系统 Edge/Chrome。
+每次构建都会实际启动冻结版受控系统浏览器，并运行 Java、HDC、hap-sign-tool 和
+keytool 密钥生成自检；任一失败便终止构建。
 
 仅在排查新版 DevEco 兼容性时可使用本机回退：
 
@@ -117,6 +120,7 @@ Windows 的主要输出结构：
 dist/
 ├── HapSign/
 │   ├── HapSign.exe
+│   ├── hapsign-cli.exe                  # agent/脚本控制台入口
 │   ├── _internal/                         # Python、Qt 和应用依赖
 │   │   └── playwright/                     # 浏览器控制驱动
 │   ├── resources/toolchain/windows/
@@ -132,7 +136,7 @@ dist/
 └── HapSign-portable-windows.zip
 ```
 
-## 6. GUI-only 快速构建
+## 6. 无工具链 GUI/CLI 快速构建
 
 仅验证界面和 PyInstaller 配置时可以跳过约数百 MiB 的工具链复制：
 
@@ -140,7 +144,7 @@ dist/
 python scripts/build_portable.py --skip-toolchain
 ```
 
-GUI-only 包仍能启动，但目标电脑若没有可发现的外部工具链，就不能检测设备、
+GUI/CLI 仍能启动，但目标电脑若没有可发现的外部工具链，就不能检测设备、
 签名或安装。不要把它当作正式便携版发布。
 
 ## 7. 构建后验证
@@ -204,29 +208,31 @@ HapSign/
 └── signed_haps/                 # 最新一个签名 HAP，与材料目录设置无关
 ```
 
-因此便携目录必须可写。源码 GUI 默认使用项目根目录，源码 CLI 默认使用用户主目录
-下的 `~/.hapsign/<bundle_name>/`。可以用 `HAPSIGN_DATA_DIR` 覆盖桌面版
-数据根目录，CLI 则可使用 `--state-dir`、`--work-dir` 和 `--output-dir`。已签名
-HAP 会跳过签名流程，因此不会
-产生新的 `.p12`、`.cer`、`.p7b` 或签名后 HAP。
+因此便携目录必须可写。源码 GUI 和源码 CLI 默认使用项目根目录下的应用配置目录，
+不依赖启动命令时的工作目录。可以用 `HAPSIGN_DATA_DIR` 覆盖应用数据根目录，CLI
+还可使用 `--state-dir`、`--work-dir`、`--output-dir` 和 `--output`。已签名
+HAP 会跳过密码学签名，因此不会产生新的 `.p12`、`.cer` 或 `.p7b`；显式传入
+`--output` 时仍会把已签名输入发布到指定路径。
 
 GUI 设置也可选择用户 `AppData Local` 或自定义签名目录。程序目录下的
 `hapsign-config.json` 保存这些设置，`logs/hapsign.log` 保存滚动诊断日志；
 程序目录不可写时日志回退到用户本地数据目录。敏感诊断默认关闭，开启后配合
 DEBUG 级别可记录 token、用户标识和完整 API 请求/响应，但密钥库密码永不记录。
-最终签名 HAP 固定使用程序目录的 `signed_haps/`，默认只保留最新一个 HapSign
-清单记录的产物，不会清理未记录的用户 HAP，当前输入文件也会受到保护；设置关闭
-保留后，任务使用系统临时目录并在结束时清理。
+最终签名 HAP 默认使用程序目录的 `signed_haps/`，也可用 CLI 参数或
+`HAPSIGN_SIGNED_HAPS_DIR` 覆盖。默认目录只保留最新一个 HapSign 清单记录的产物，
+不会清理未记录的用户 HAP，当前输入文件也会受到保护；设置关闭保留后，任务使用
+系统临时目录并在结束时清理。
 
 ## 9. 跨平台注意事项
 
-- `runtime.py` 已集中处理平台目录和可执行文件名；`toolchain.lock.json` 当前只
-  锁定并实测 Windows x64。
+- `runtime.py` 已集中处理平台目录、可执行文件名、`JAVA_HOME`/`PATH` 和显式环境
+  变量覆盖；`toolchain.lock.json` 当前锁定 Windows x64 与 Linux x64。
 - 新平台应增加独立锁定项、对应平台 Temurin 归档、OpenHarmony 工具包与真实设备
   测试，不能复用 Windows 二进制。
 - macOS 发布通常还需要应用包、代码签名和 notarization；当前脚本只生成目录
   和 ZIP。
-- Linux 需要在目标发行版或兼容的较旧发行版构建，并验证 Qt、USB 权限和 HDC。
+- Linux 应在目标发行版或兼容的较旧发行版构建，并验证 Qt、USB/udev 权限和 HDC；
+  没有 `lsof` 时运行时会使用 `/proc` 识别本次启动的 HDC server。
 - 不要把一个平台的 Java runtime 或 HDC 复制进另一个平台的产物。
 
 ## 10. 发布前清单

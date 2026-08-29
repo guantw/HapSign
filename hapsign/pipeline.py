@@ -15,9 +15,11 @@
 import json
 import logging
 import os
+import shutil
 import tempfile
 import threading
 import traceback
+import uuid
 import zipfile
 from collections.abc import Callable
 from datetime import date
@@ -35,7 +37,7 @@ from hapsign.config import (
     KEY_ALIAS,
     KEYSTORE_PASSWORD,
 )
-from hapsign.diagnostics import redact_sensitive_text
+from hapsign.diagnostics import is_valid_device_udid, redact_sensitive_text
 from hapsign.login.browser_login import BrowserLogin
 from hapsign.models import AppBriefInfo, CertResult, ProvisionResult, TokenInfo
 from hapsign.signing.hap_inspect import is_hap_signed
@@ -96,17 +98,37 @@ class SignPipeline:
         progress_callback: Callable[[int, str], None] | None = None,
         serial: str | None = None,
         install_after_sign: bool = True,
+        *,
+        device_udid: str = "",
+        signed_output_path: str = "",
+        overwrite_output: bool = False,
     ):
         self.hap_path = hap_path
         self.bundle_name = bundle_name
         self.country = country
         self.device_type = device_type
         self.serial = serial
-        self.enable_capability = enable_capability
+        self.requested_enable_capability = bool(enable_capability)
+        self.enable_capability = self.requested_enable_capability
         self.force_refresh_token = force_refresh_token
         self.force_refresh_signing = force_refresh_signing
         self.browser_mode = browser_mode
         self.keep_signed_hap = keep_signed_hap
+        self.install_after_sign = install_after_sign
+        self.device_udid = device_udid.strip()
+        if self.device_udid and not is_valid_device_udid(self.device_udid):
+            raise ValueError("设备 UDID 必须是 64 位十六进制字符串")
+        self.signed_output_path = (
+            os.path.expanduser(signed_output_path) if signed_output_path else ""
+        )
+        self.overwrite_output = overwrite_output
+        if self.signed_output_path:
+            output_absolute = os.path.realpath(os.path.abspath(self.signed_output_path))
+            input_absolute = os.path.realpath(os.path.abspath(self.hap_path))
+            if os.path.normcase(output_absolute) == os.path.normcase(input_absolute):
+                raise ValueError("签名输出不能覆盖输入 HAP，请指定其他路径")
+            if os.path.splitext(output_absolute)[1].lower() != ".hap":
+                raise ValueError("签名输出路径必须以 .hap 结尾")
         self._temporary_signed_dir: tempfile.TemporaryDirectory | None = None
         self.cancel_event = cancel_event
         self.progress_callback = progress_callback
@@ -115,7 +137,6 @@ class SignPipeline:
             if state_dir
             else default_state_dir()
         )
-        self.install_after_sign = install_after_sign
         if work_dir:
             self.work_dir = os.path.abspath(os.path.expanduser(work_dir))
         else:
@@ -138,7 +159,7 @@ class SignPipeline:
         self._provision_api: ProvisionAPI | None = None
         self._capability_api: CapabilityAPI | None = None
         self._token_from_cache = False
-        self._udid = ""
+        self._udid = self.device_udid
         self._installer: Installer | None = None
 
         # 运行期状态：全部显式初始化，避免 hasattr 探测和未初始化属性。
@@ -166,8 +187,8 @@ class SignPipeline:
         """加载当天的 token 缓存。
 
         条件：缓存存在、creation_date 是今天；缓存可能是 Windows DPAPI 加密格式
-        或非 Windows 平台的 0600 明文 JSON。Windows 上的旧版明文缓存首次读取时
-        安全迁移为加密格式；解密失败视为无缓存，回退重新登录。
+        或受限权限的明文 JSON。Windows 上的明文缓存首次读取时迁移为加密格式；
+        其他平台继续使用 0o600 明文缓存。解密失败视为无缓存，回退重新登录。
         """
         if not os.path.exists(self._token_cache_path):
             return None
@@ -215,7 +236,7 @@ class SignPipeline:
         ):
             return None
         if legacy:
-            # 旧版明文缓存：安全迁移为加密格式，失败不影响本次使用。
+            # Windows 会迁移为 DPAPI；其他平台重写为 0o600 明文并记录安全告警。
             self._write_token_cache(cache)
         return cache
 
@@ -315,16 +336,36 @@ class SignPipeline:
             logger.info("[cache] 签名文件创建于 %s，非今日", meta.get("creation_date"))
             return None
 
-        cached_udid = str(meta.get("udid", ""))
-        if self._udid and cached_udid != self._udid:
-            logger.info("[cache] 签名 Profile 属于其他设备，重新申请")
+        if meta.get("bundle_name") != self.bundle_name:
+            logger.info("[cache] 签名文件包名不匹配，将重新申请")
             return None
 
+        cached_capability = meta.get("enable_capability")
+        cached_request = meta.get("requested_enable_capability", cached_capability)
+        if (
+            not isinstance(cached_capability, bool)
+            or not isinstance(cached_request, bool)
+            or (cached_capability and not cached_request)
+            or cached_request != self.requested_enable_capability
+        ):
+            logger.info("[cache] 签名文件能力模式不匹配，将重新申请")
+            return None
+
+        cached_udid = str(meta.get("udid", "")).strip()
+        if not is_valid_device_udid(cached_udid):
+            logger.info("[cache] 签名文件缺少有效设备 UDID，将重新申请")
+            return None
+        if self._udid and cached_udid.lower() != self._udid.lower():
+            logger.info("[cache] 签名文件设备不匹配，将重新申请")
+            return None
         for key in ("p12_path", "cer_path", "p7b_path"):
             path = meta.get(key, "")
-            if not path or not os.path.exists(path):
+            if not path or not os.path.isfile(path):
                 logger.info("[cache] 签名文件缺失 (%s)", key)
                 return None
+        if not self._udid:
+            self._udid = cached_udid
+        self.enable_capability = cached_capability
         return meta
 
     def _save_metadata(
@@ -347,6 +388,8 @@ class SignPipeline:
             "cert_object_id": cert_object_id,
             "udid": udid,
             "key_alias": KEY_ALIAS,
+            "requested_enable_capability": self.requested_enable_capability,
+            "enable_capability": self.enable_capability,
         }
         with open(self._metadata_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
@@ -379,19 +422,31 @@ class SignPipeline:
         Returns:
             全部步骤成功返回 True，任一步骤失败返回 False。
         """
-        # 所有路径都先确认设备可用，避免登录、申请证书或签名完成后才发现
-        # HDC 无法安装。检测得到的 UDID 也会在注册设备时直接复用。
-        if not self._run_steps([("检测设备连接", self._step_check_device)]):
-            return False
+        # 兼容旧行为：签名并安装时仍在读取 HAP、登录和申请材料前确认设备可用。
+        # 仅签名时可以复用缓存 Profile，或由调用方直接提供设备 UDID。
+        device_checked = False
+        if self.install_after_sign:
+            if not self._run_steps([("检测设备连接", self._step_check_device)]):
+                return False
+            device_checked = True
 
-        # 已签名包：跳过登录 / 申请 / 签名，直接安装原文件
+        # 已签名包跳过重签名；显式输出仍应兑现，安装时也使用发布后的路径。
         if is_hap_signed(self.hap_path):
             logger.info("[sign] 检测到已签名 HAP，跳过签名流程")
             self._signed_hap_path = self.hap_path
+            if self.signed_output_path:
+                self._publish_existing_signed_hap()
             steps = []
             if self.install_after_sign:
                 steps.append(("安装 hap 到设备", self._step_install))
             return self._run_steps(steps)
+
+        # 仅签名允许完全离线复用缓存，但显式给出 serial 时必须先读取该目标
+        # 的 UDID，避免误用另一个设备的 Profile。
+        if self.serial and not device_checked:
+            if not self._run_steps([("检测设备连接", self._step_check_device)]):
+                return False
+            device_checked = True
 
         # 强制刷新 token 时连带刷新签名文件（仅本次运行，不改写实例属性）
         refresh_signing = self.force_refresh_signing
@@ -417,6 +472,12 @@ class SignPipeline:
             if self.install_after_sign:
                 steps.append(("安装 hap 到设备", self._step_install))
         else:
+            if (
+                not self._udid
+                and not device_checked
+                and not self._run_steps([("检测设备连接", self._step_check_device)])
+            ):
+                return False
             # 需要申请签名文件，先确保有 token
             if not self.force_refresh_token:
                 token_cached = self._load_token_cache()
@@ -435,6 +496,7 @@ class SignPipeline:
                 except OperationCancelled:
                     raise
                 except Exception as e:
+                    self._last_error = f"登录失败: {redact_sensitive_text(e)}"
                     logger.error("x 登录失败: %s", redact_sensitive_text(e))
                     logger.debug(
                         "登录失败调用栈:\n%s",
@@ -813,11 +875,24 @@ class SignPipeline:
     def _step_sign_hap(self) -> None:
         """用 hap-sign-tool 对 hap 包签名。"""
         hap_basename = os.path.splitext(os.path.basename(self.hap_path))[0]
-        if self.keep_signed_hap:
-            os.makedirs(self.signed_output_dir, exist_ok=True)
-            output_path = os.path.join(
+        explicit_output = bool(self.signed_output_path)
+        keep_output = self.keep_signed_hap or explicit_output
+        if explicit_output:
+            final_path = os.path.abspath(self.signed_output_path)
+            output_path = self._prepare_staged_output(
+                final_path,
+                operation="signing",
+                refuse_existing=not self.overwrite_output,
+            )
+        elif keep_output:
+            final_path = os.path.join(
                 self.signed_output_dir,
-                f".{hap_basename}.signing.tmp.hap",
+                f"{hap_basename}_signed.hap",
+            )
+            output_path = self._prepare_staged_output(
+                final_path,
+                operation="signing",
+                refuse_existing=False,
             )
         else:
             self._temporary_signed_dir = tempfile.TemporaryDirectory(
@@ -839,26 +914,136 @@ class SignPipeline:
                 self.keystore_password,
                 output_path,
             )
-        except Exception:
-            if self.keep_signed_hap:
-                try:
-                    os.remove(output_path)
-                except FileNotFoundError:
-                    pass
+            if keep_output:
+                # 签名失败不会破坏上一份同名产物或其他 HAP；显式输出还会在发布
+                # 时再次执行不可覆盖门禁，避免并发任务越过签名前的快速检查。
+                self._publish_staged_output(
+                    output_path,
+                    final_path,
+                    overwrite=not explicit_output or self.overwrite_output,
+                )
+                if not explicit_output:
+                    self._cleanup_previous_signed_haps(final_path)
+                    self._save_signed_hap_manifest(final_path)
+            else:
+                self._signed_hap_path = output_path
+        except BaseException:
+            if keep_output:
+                self._cleanup_staged_output(output_path)
             raise
-        if self.keep_signed_hap:
-            final_path = os.path.join(
-                self.signed_output_dir,
-                f"{hap_basename}_signed.hap",
-            )
-            # 原子发布新文件；签名失败不会破坏上一份同名产物或其他 HAP。
-            os.replace(output_path, final_path)
-            self._cleanup_previous_signed_haps(final_path)
-            self._save_signed_hap_manifest(final_path)
-            self._signed_hap_path = final_path
-        else:
-            self._signed_hap_path = output_path
         logger.info("签名后 hap: %s", self._signed_hap_path)
+
+    def _publish_existing_signed_hap(self) -> None:
+        """跳过重签名时仍按显式输出和覆盖策略原子发布 HAP。"""
+        final_path = os.path.abspath(self.signed_output_path)
+        temporary_path = self._prepare_staged_output(
+            final_path,
+            operation="copying",
+            refuse_existing=not self.overwrite_output,
+        )
+        try:
+            shutil.copy2(self.hap_path, temporary_path)
+            self._publish_staged_output(
+                temporary_path,
+                final_path,
+                overwrite=self.overwrite_output,
+            )
+        except BaseException:
+            self._cleanup_staged_output(temporary_path)
+            raise
+
+    @staticmethod
+    def _prepare_staged_output(
+        final_path: str,
+        *,
+        operation: str,
+        refuse_existing: bool,
+    ) -> str:
+        """为同目录原子发布准备唯一暂存路径，并执行早期不覆盖检查。"""
+        output_directory = os.path.dirname(final_path)
+        os.makedirs(output_directory, exist_ok=True)
+        if refuse_existing and os.path.exists(final_path):
+            raise FileExistsError(
+                f"签名输出已存在：{final_path}；如需覆盖请显式启用覆盖"
+            )
+        return os.path.join(
+            output_directory,
+            f".hapsign-{uuid.uuid4().hex}.{operation}.tmp.hap",
+        )
+
+    def _publish_staged_output(
+        self,
+        staged_path: str,
+        final_path: str,
+        *,
+        overwrite: bool,
+    ) -> None:
+        """按覆盖策略发布完整暂存文件，并记录最终产物路径。"""
+        if overwrite:
+            os.replace(staged_path, final_path)
+        else:
+            self._publish_without_overwrite(staged_path, final_path)
+        self._signed_hap_path = final_path
+
+    @staticmethod
+    def _cleanup_staged_output(staged_path: str) -> None:
+        try:
+            os.remove(staged_path)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning(
+                "无法清理签名临时文件 %s：%s",
+                staged_path,
+                redact_sensitive_text(exc),
+            )
+
+    @staticmethod
+    def _publish_without_overwrite(source_path: str, final_path: str) -> None:
+        """发布完整产物且绝不替换并发创建的目标文件。"""
+
+        def already_exists() -> FileExistsError:
+            return FileExistsError(
+                f"签名输出已存在：{final_path}；如需覆盖请显式启用覆盖"
+            )
+
+        try:
+            # 源与目标位于同一目录。硬链接让完整文件原子可见，并由文件系统保证
+            # 目标必须不存在；NTFS、Linux 和 macOS 常见文件系统均支持。
+            os.link(source_path, final_path)
+        except FileExistsError as exc:
+            raise already_exists() from exc
+        except OSError:
+            # FAT/exFAT 等文件系统不支持硬链接。用 O_EXCL 保留“不覆盖”保证；
+            # 复制失败时删除不完整目标，调用方仍会清理签名临时文件。
+            flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+            try:
+                descriptor = os.open(final_path, flags, 0o600)
+            except FileExistsError as exc:
+                raise already_exists() from exc
+            try:
+                with (
+                    os.fdopen(descriptor, "wb") as target,
+                    open(source_path, "rb") as source,
+                ):
+                    shutil.copyfileobj(source, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+            except BaseException:
+                try:
+                    os.remove(final_path)
+                except OSError:
+                    pass
+                raise
+        try:
+            os.remove(source_path)
+        except OSError as exc:
+            # 产物已完整发布，残留的唯一 UUID 隐藏临时名不应让签名结果失败。
+            logger.warning(
+                "签名产物已发布，但无法清理临时文件 %s：%s",
+                source_path,
+                redact_sensitive_text(exc),
+            )
 
     def _cleanup_previous_signed_haps(self, final_path: str) -> None:
         """只清理 manifest 记录的旧产物，绝不按扩展名删除用户文件。"""

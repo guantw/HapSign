@@ -78,3 +78,11 @@ def test_redact_sensitive_text_hides_device_udid() -> None:
     assert "Device not found in list: <redacted-udid>" in text
     # 不应截断更长的十六进制诊断标识。
     assert f"request_id={udid}0" in text
+
+
+def test_device_udid_validation_uses_the_same_boundary_as_redaction() -> None:
+    assert diagnostics.is_valid_device_udid("  " + "A" * 64 + "\n")
+    assert diagnostics.is_valid_device_udid("a" * 64)
+    assert not diagnostics.is_valid_device_udid("A" * 63)
+    assert not diagnostics.is_valid_device_udid("G" * 64)
+    assert not diagnostics.is_valid_device_udid(None)

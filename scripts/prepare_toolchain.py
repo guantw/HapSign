@@ -1,6 +1,6 @@
 """从可审计的公开上游准备 HapSign 便携工具链。
 
-下载内容、大小和 SHA-256 固定在 ``toolchain.lock.json``。Windows 当前使用：
+下载内容、大小和 SHA-256 固定在 ``toolchain.lock.json``。Windows/Linux 使用：
 
 * OpenHarmony 6.1 公共 SDK 中的 HDC、libusb 和 hap-sign-tool；
 * Eclipse Temurin 21 JDK，经 jlink 缩成仅供 HapSign 使用的运行时。
@@ -23,6 +23,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+import warnings
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -41,6 +42,15 @@ def _platform_tag() -> str:
     if system == "windows":
         return "windows"
     return "linux"
+
+
+def _architecture_tag() -> str:
+    machine = platform.machine().lower()
+    if machine in {"amd64", "x86_64"}:
+        return "x64"
+    if machine in {"aarch64", "arm64"}:
+        return "arm64"
+    return machine
 
 
 def _sha256(path: Path) -> str:
@@ -197,6 +207,8 @@ def _extract_openharmony_files(
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source, target.open("wb") as destination:
                 shutil.copyfileobj(source, destination, length=DOWNLOAD_CHUNK_SIZE)
+            if metadata.get("executable"):
+                target.chmod(target.stat().st_mode | 0o111)
             _verify_file(target, metadata, label=target_name)
 
 
@@ -213,12 +225,63 @@ def _safe_extract_zip(archive_path: Path, destination: Path) -> None:
         archive.extractall(destination)
 
 
+def _safe_extract_tar(archive_path: Path, destination: Path) -> None:
+    """安全提取 tar 归档，并保留 Linux JDK 的可执行位和内部符号链接。"""
+    destination_resolved = destination.resolve()
+    with tarfile.open(archive_path, mode="r:*") as archive:
+        for member in archive.getmembers():
+            if not (
+                member.isfile() or member.isdir() or member.issym() or member.islnk()
+            ):
+                raise RuntimeError(f"TAR 包含不支持的特殊文件：{member.name}")
+            target = (destination / member.name).resolve()
+            if (
+                target != destination_resolved
+                and destination_resolved not in target.parents
+            ):
+                raise RuntimeError(f"TAR 包含越界路径：{member.name}")
+            if member.issym():
+                link_target = (target.parent / member.linkname).resolve()
+            elif member.islnk():
+                link_target = (destination / member.linkname).resolve()
+            else:
+                continue
+            if (
+                link_target != destination_resolved
+                and destination_resolved not in link_target.parents
+            ):
+                raise RuntimeError(
+                    f"TAR 包含越界链接：{member.name} -> {member.linkname}"
+                )
+        # ``filter`` 在 Python 3.11.4 引入；项目仍兼容 3.11.0。旧补丁版本使用
+        # 上面的显式路径/链接门禁，锁定归档也已在调用前校验 SHA-256。
+        data_filter = getattr(tarfile, "data_filter", None)
+        if data_filter is None:
+            with warnings.catch_warnings():
+                # 新版 Python 对无 filter 提取发出迁移警告；旧版没有 filter 参数，
+                # 路径、链接和特殊文件已在上方逐项校验。
+                warnings.simplefilter("ignore", DeprecationWarning)
+                archive.extractall(destination)
+        else:
+            archive.extractall(destination, filter=data_filter)
+
+
+def _extract_jdk_archive(archive_path: Path, destination: Path) -> None:
+    if zipfile.is_zipfile(archive_path):
+        _safe_extract_zip(archive_path, destination)
+        return
+    if tarfile.is_tarfile(archive_path):
+        _safe_extract_tar(archive_path, destination)
+        return
+    raise RuntimeError(f"不支持的 JDK 归档格式：{archive_path}")
+
+
 def _find_jdk_root(extracted: Path) -> Path:
     executable = "jlink.exe" if os.name == "nt" else "jlink"
     matches = list(extracted.glob(f"*/bin/{executable}"))
     if len(matches) != 1:
         names = ", ".join(str(item) for item in matches) or "(未找到)"
-        raise RuntimeError(f"Temurin ZIP 中无法唯一定位 {executable}：{names}")
+        raise RuntimeError(f"Temurin 归档中无法唯一定位 {executable}：{names}")
     return matches[0].parent.parent
 
 
@@ -230,7 +293,7 @@ def _create_java_runtime(
 ) -> None:
     with tempfile.TemporaryDirectory(prefix="hapsign-temurin-") as temporary:
         extracted = Path(temporary)
-        _safe_extract_zip(jdk_archive, extracted)
+        _extract_jdk_archive(jdk_archive, extracted)
         jdk_root = _find_jdk_root(extracted)
         executable = "jlink.exe" if os.name == "nt" else "jlink"
         command = [
@@ -393,6 +456,12 @@ def prepare(
             f"jlink 不能跨平台生成运行时：目标 {target_platform}，"
             f"当前主机 {_platform_tag()}"
         )
+    target_architecture = platform_config.get("architecture")
+    if target_architecture and target_architecture != _architecture_tag():
+        raise RuntimeError(
+            f"工具链架构不匹配：目标 {target_architecture}，"
+            f"当前主机 {_architecture_tag()}"
+        )
 
     if output.exists() and not force:
         raise RuntimeError(f"输出目录已存在；确认后使用 --force 重建：{output}")
@@ -434,7 +503,7 @@ def prepare(
     _verify_file(
         toolchains_zip,
         {"sha256": openharmony["toolchains_sha256"]},
-        label="OpenHarmony Windows toolchains",
+        label=f"OpenHarmony {target_platform} toolchains",
     )
 
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}-", dir=str(output.parent)))
@@ -489,7 +558,7 @@ def main() -> int:
     parser.add_argument(
         "--jdk-archive",
         type=Path,
-        help="使用已下载的 Temurin JDK ZIP，同时仍执行锁定校验",
+        help="使用已下载的 Temurin JDK 归档，同时仍执行锁定校验",
     )
     parser.add_argument(
         "--force",

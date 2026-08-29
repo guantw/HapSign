@@ -87,6 +87,17 @@ def test_data_directory_environment_override_wins(tmp_path, monkeypatch) -> None
     ) == (tmp_path / "override" / "signing_files")
 
 
+def test_exact_signing_directory_environment_override_wins(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HAPSIGN_DATA_DIR", str(tmp_path / "data-root"))
+    monkeypatch.setenv("HAPSIGN_SIGNING_DIR", str(tmp_path / "exact-state"))
+
+    assert settings.signing_files_dir(settings.AppSettings()) == (
+        tmp_path / "exact-state"
+    )
+
+
 def test_signed_hap_directory_is_always_in_program_directory(
     tmp_path, monkeypatch
 ) -> None:
@@ -94,3 +105,9 @@ def test_signed_hap_directory_is_always_in_program_directory(
     monkeypatch.setenv("HAPSIGN_DATA_DIR", str(tmp_path / "elsewhere"))
 
     assert settings.signed_haps_dir() == tmp_path / "app" / "signed_haps"
+
+
+def test_signed_hap_directory_environment_override_wins(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HAPSIGN_SIGNED_HAPS_DIR", str(tmp_path / "outputs"))
+
+    assert settings.signed_haps_dir() == tmp_path / "outputs"
