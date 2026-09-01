@@ -38,7 +38,11 @@ from hapsign.config import (
     KEYSTORE_PASSWORD,
 )
 from hapsign.diagnostics import is_valid_device_udid, redact_sensitive_text
-from hapsign.login.browser_login import BrowserLogin
+from hapsign.login.browser_login import (
+    DEFAULT_AUTH_TIMEOUT,
+    AuthEventCallback,
+    BrowserLogin,
+)
 from hapsign.models import AppBriefInfo, CertResult, ProvisionResult, TokenInfo
 from hapsign.signing.hap_inspect import is_hap_signed
 from hapsign.signing.hap_signer import HapSigner
@@ -99,6 +103,9 @@ class SignPipeline:
         serial: str | None = None,
         install_after_sign: bool = True,
         *,
+        callback_port: int = 0,
+        auth_timeout: int = DEFAULT_AUTH_TIMEOUT,
+        auth_event_callback: AuthEventCallback | None = None,
         device_udid: str = "",
         signed_output_path: str = "",
         overwrite_output: bool = False,
@@ -113,6 +120,9 @@ class SignPipeline:
         self.force_refresh_token = force_refresh_token
         self.force_refresh_signing = force_refresh_signing
         self.browser_mode = browser_mode
+        self.callback_port = callback_port
+        self.auth_timeout = auth_timeout
+        self.auth_event_callback = auth_event_callback
         self.keep_signed_hap = keep_signed_hap
         self.install_after_sign = install_after_sign
         self.device_udid = device_udid.strip()
@@ -586,6 +596,9 @@ class SignPipeline:
         login = BrowserLogin(
             browser_mode=self.browser_mode,
             cancel_event=self.cancel_event,
+            callback_port=self.callback_port,
+            callback_timeout=self.auth_timeout,
+            event_callback=self.auth_event_callback,
         )
         self._temp_token = login.login(self.country)
 

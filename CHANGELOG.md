@@ -10,8 +10,9 @@
   无效时会执行一次性材料刷新；能力模式可通过一致使用 `--enable-capability` 匹配，
   只有其余一致性校验通过时，才可显式运行
   `migrate-cache --profile-type normal|system-basic` 保留缓存。
-- `HAPSIGN-BREAKING-002`：CLI 默认浏览器从普通系统 Profile 改为隔离的
-  `system_controlled`；可用 `--browser` 或 `HAPSIGN_BROWSER` 配置。
+- `HAPSIGN-BREAKING-002`：CLI 默认浏览器从普通系统 Profile 改为自适应 `auto`；
+  桌面会话仍优先使用隔离的受控浏览器，SSH、CI 或无桌面 Linux 会话改为外部浏览器交接。
+  可用 `--browser` 或 `HAPSIGN_BROWSER` 配置。
 - `HAPSIGN-BREAKING-003`：CLI 默认状态/产物从 PR #5 的 `~/.hapsign`（更早版本为
   进程工作目录）改到应用目录；可用 `--state-dir`、`--output-dir`、
   `HAPSIGN_SIGNING_DIR` 和 `HAPSIGN_SIGNED_HAPS_DIR` 恢复原路径；`inspect` 会检测
@@ -22,6 +23,9 @@
 
 ### Added
 
+- CLI 新增 `auto`/`external` 浏览器模式、可配置 loopback 回调端口和认证超时；SSH、
+  CI 或无桌面 Linux 会话会输出安全端口转发指引，`--events json` 提供结构化中间事件且不改变
+  最终单行 JSON stdout 协议。
 - 新增面向 Agent 的 `auth`、`devices list`、`sign`、`install`、`deploy` CLI
   子命令；支持单行 JSON stdout、stderr 日志、明确退出码与输入校验。
 - CLI 支持显式 HDC `--serial`、真机/模拟器候选标记、签名与安装分离，以及安装后

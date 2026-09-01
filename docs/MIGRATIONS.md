@@ -14,7 +14,7 @@
 | 编号 | 兼容策略 | 明确结论 |
 | --- | --- | --- |
 | 001 | 配置匹配、显式迁移或备份后刷新 | 接受新的缓存一致性校验 |
-| 002 | 可配置恢复普通系统浏览器 | 接受 `system_controlled` 新默认值 |
+| 002 | 可配置恢复普通系统浏览器 | 接受 `auto` 新默认值 |
 | 003 | 可配置恢复旧状态与产物目录 | 接受应用目录新默认值 |
 | 004 | 仅迁移调用方，不提供混合输出模式 | 保留 stdout 结果与 stderr 日志分离 |
 | 005 | 仅迁移调用方，不提供扁平参数兼容层 | 保留显式子命令接口 |
@@ -78,8 +78,9 @@ hapsign inspect --hap app.hap --enable-capability --json
 
 ## HAPSIGN-BREAKING-002
 
-CLI 登录浏览器默认值由 `system` 改为 `system_controlled`。新默认使用隔离的临时
-Edge/Chrome 上下文，不带用户默认浏览器中的 cookie、保存密码、扩展和旧 SSO 状态。
+CLI 登录浏览器默认值由 `system` 改为 `auto`。桌面会话优先使用隔离的临时
+Edge/Chrome 上下文；SSH、CI 或无桌面 Linux 会话输出外部浏览器和安全 loopback
+转发指引，不再尝试启动用户看不到的浏览器。
 
 需要旧行为时显式配置：
 

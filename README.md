@@ -84,7 +84,8 @@ python -m playwright install --no-shell chromium
 
 桌面设置提供“受控系统浏览器”“内置 Chromium”和“非受控系统默认浏览器”三种
 模式；环境变量 `HAPSIGN_BROWSER` 可使用 `system_controlled`、`playwright`
-或 `system` 覆盖代码默认值。
+或 `system` 覆盖桌面默认值。CLI 默认使用 `auto`：SSH、CI 或无桌面 Linux 会话不会
+尝试启动不可见的浏览器，而会显示外部浏览器交接信息；也可显式使用 `external`。
 
 ### 可选：配置 DevEco Studio 回退路径
 
@@ -235,15 +236,28 @@ CLI 的标准输出可以保持为单个 JSON 文档，普通运行日志写入�
 hapsign doctor --json
 hapsign inspect --hap app.hap --json
 hapsign sign --hap app.hap --output artifacts/app-signed.hap \
-  --state-dir .hapsign-state --browser system_controlled --json
+  --state-dir .hapsign-state --browser auto --json
 ```
+
+在 SSH、CI 或无桌面 Linux 上，`auto` 会保持命令运行并输出一次性登录地址与回调端口。
+在有浏览器的电脑另开终端，把提示中的同一端口转发到运行 HapSign 的 SSH 目标，再打开
+地址：
+
+```bash
+ssh -N -L 127.0.0.1:<端口>:127.0.0.1:<端口> <同一SSH目标>
+```
+
+容器等环境应使用对应的私有端口转发能力。回调服务始终只监听 loopback，不应改为公网
+监听。`--events json` 会在 stderr 输出带
+`HAPSIGN_EVENT=` 前缀的结构化交接事件；最终 stdout 仍只有原有单行 JSON。登录地址
+包含一次性状态值，不要分享或写入持久日志。
 
 首次为某个应用申请 Profile 时仍需要设备 UDID。默认会通过 HDC 从已连接设备读取；
 如果 agent 已从可信来源获得 UDID，可以跳过本机设备探测：
 
 ```bash
 hapsign sign --hap app.hap --device-udid <64位十六进制UDID> \
-  --browser system_controlled --json
+  --browser auto --json
 ```
 
 同一天已有与包名、能力模式及已知设备匹配的可用签名材料缓存时，仅签名模式不要求
@@ -310,7 +324,7 @@ Windows/macOS 输出 `dist/HapSign-portable-<platform>.zip`，Linux 输出
 hapsign doctor [--state-dir DIR] [--output-dir DIR] [--json]
 hapsign inspect --hap HAP [--bundle-name NAME] [--state-dir DIR] [--enable-capability] [--json]
 hapsign migrate-cache --hap HAP --profile-type normal|system-basic [--state-dir DIR] [--json]
-hapsign auth [login|status] [--refresh] [--state-dir DIR] [--json]
+hapsign auth [login|status] [--refresh] [认证交互选项] [--state-dir DIR] [--json]
 hapsign devices [list] [--connected-only] [--json]
 hapsign sign --hap HAP [--serial SERIAL | --device-udid UDID] [签名选项] [--json]
 hapsign install --hap SIGNED_HAP --serial SERIAL [--bundle-name NAME] [--json]
@@ -325,7 +339,10 @@ sign / deploy 签名选项:
   --output-dir DIR     未指定 --output 时的签名产物目录
   --output FILE        签名 HAP 的精确输出路径
   --overwrite-output  允许覆盖 --output 指定的已有文件
-  --browser MODE       system、system_controlled 或 playwright
+  --browser MODE       auto、external、system、system_controlled 或 playwright
+  --callback-port PORT loopback 回调端口，默认 0 自动分配
+  --auth-timeout SEC   浏览器授权等待时间，默认 600 秒
+  --events FORMAT      中间事件格式：human 或 json（写入 stderr）
   --enable-capability  使用 Real Profile（APL=system_basic）
   --refresh-token      强制浏览器认证，同时刷新签名材料
   --refresh-signing    只重新申请证书/Profile，复用有效 Token
@@ -354,7 +371,9 @@ sign / deploy 签名选项:
 
 ### 首次运行
 
-会弹出浏览器窗口，打开华为登录页。手动输入账号密码登录，如果有验证码或二次验证也手动处理。登录成功后浏览器会自动关闭，后续自动完成签名和安装。
+有可见桌面时会打开华为登录页；SSH、CI 或无桌面 Linux 会给出外部浏览器和安全
+loopback 转发指引。账号密码、验证码和二次验证始终由用户在浏览器中处理。登录成功后
+继续完成签名和安装。
 
 ### Real Profile（system_basic 权限）
 
@@ -425,9 +444,34 @@ token 缓存是权限限制为 `0o600` 的明文文件，签名私钥等材料�
 不要上传、分享或放入云同步目录。共享电脑使用完毕后应删除 `signing_files/`。详细
 说明见 [SECURITY.md](SECURITY.md)。
 
-## 限制
+## 已验证平台与规格限制
 
+### 已实机验证的登录环境
+
+下表只描述本次源码 CLI 的真实登录验证范围，不代表 GUI、USB、HAP 签名安装或所有
+同类操作系统版本均已验证。
+
+| CLI 运行环境 | 浏览器路径 | 已验证结果 |
+| --- | --- | --- |
+| Windows 11 专业版 64 位 | `auto` 启动隔离的 Edge | 用户可见登录页、loopback 回调、Token 换取、DPAPI 缓存及缓存复用均通过 |
+| Ubuntu 24.04.4 LTS x86_64（WSL2） | `auto` 调用 Windows 默认浏览器 | 用户可见登录页、跨 WSL loopback 回调、Token 换取、`0o600` 缓存及缓存复用均通过 |
+
+WSL2 结果不能替代原生 Linux 发行版或远程 SSH 环境的实机验证；这些环境应在发布前
+按其网络、浏览器交接和权限配置单独回归。未列入上表的平台不等同于不支持，只表示
+尚未完成同等范围的真实登录验证。
+
+### 认证规格边界
+
+- 首次认证以及缓存失效后的重新认证，不支持“全程只有纯命令行、任何电脑都没有可用
+  浏览器”的运行方式。OAuth 登录必须由用户在一台能运行现代浏览器的电脑上完成
+- SSH、CI 或无桌面 Linux 可以运行 CLI；`auto`/`external` 会输出一次性登录地址和
+  callback 端口，通过安全的同端口 loopback 转发把浏览器回调送回 CLI。因此“不要求
+  Linux 主机有桌面”不等于“不需要浏览器”
+- 已有且仍被服务端接受的 Token 缓存可以直接复用，此时本次调用无需再次打开浏览器
 - 登录验证码 / 二次验证需要用户在浏览器中手动处理
+
+### 其他限制
+
 - 拖拽安装脚本仅支持 Windows（`sign_install.bat`）；Linux/macOS 请使用
   `hapsign` 命令行
 - Windows 便携版已经过完整构建和实机流程验证；Linux x64 已有锁定公开工具链、

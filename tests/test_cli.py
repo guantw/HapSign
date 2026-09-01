@@ -128,7 +128,7 @@ def test_deploy_json_returns_pipeline_result(
     assert captured["bundle_name"] == "com.example.app"
     assert captured["serial"] == "device-serial"
     assert captured["install_after_sign"] is True
-    assert captured["browser_mode"] == "system_controlled"
+    assert captured["browser_mode"] == "auto"
     assert Path(captured["state_dir"]) == state_dir
     assert Path(captured["signed_output_dir"]) == output_dir
     if pipeline_result:
@@ -378,7 +378,145 @@ def test_cli_browser_default_allows_valid_environment_override(monkeypatch) -> N
     monkeypatch.setenv("HAPSIGN_BROWSER", "system")
     assert cli.build_parser().parse_args(["auth"]).browser == "system"
     monkeypatch.setenv("HAPSIGN_BROWSER", "invalid")
-    assert cli.build_parser().parse_args(["auth"]).browser == "system_controlled"
+    assert cli.build_parser().parse_args(["auth"]).browser == "auto"
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--callback-port", "not-a-port"),
+        ("--callback-port", "-1"),
+        ("--callback-port", "65536"),
+        ("--auth-timeout", "not-a-timeout"),
+        ("--auth-timeout", "29"),
+        ("--auth-timeout", "3601"),
+    ],
+)
+def test_auth_interaction_options_reject_invalid_values(option, value, capsys) -> None:
+    result = cli.main(["auth", option, value, "--json"])
+
+    assert result == cli.EXIT_USAGE
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "invalid_arguments"
+
+
+def test_auth_interaction_options_accept_boundary_values() -> None:
+    low = cli.build_parser().parse_args(
+        ["auth", "--callback-port", "0", "--auth-timeout", "30"]
+    )
+    high = cli.build_parser().parse_args(
+        ["auth", "--callback-port", "65535", "--auth-timeout", "3600"]
+    )
+
+    assert (low.callback_port, low.auth_timeout) == (0, 30)
+    assert (high.callback_port, high.auth_timeout) == (65535, 3600)
+
+
+def test_cli_auth_interaction_options_are_forwarded(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    captured = {}
+
+    class FakePipeline:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def authenticate(self, force_refresh=False):
+            captured["force_refresh"] = force_refresh
+            captured["auth_event_callback"](
+                {
+                    "event": "auth_required",
+                    "method": "ssh_loopback",
+                    "reason": "ssh",
+                    "verification_uri": "https://example.invalid/one-time",
+                    "callback_host": "127.0.0.1",
+                    "callback_port": 43123,
+                    "expires_in": 900,
+                }
+            )
+            return {"authenticated": True, "from_cache": False}
+
+        def auth_status(self):
+            return {
+                "authenticated": True,
+                "cache_path": tmp_path / ".token_cache.json",
+            }
+
+    monkeypatch.setattr(cli, "SignPipeline", FakePipeline)
+
+    result = cli.main(
+        [
+            "auth",
+            "--browser",
+            "external",
+            "--callback-port",
+            "43123",
+            "--auth-timeout",
+            "900",
+            "--events",
+            "json",
+            "--state-dir",
+            str(tmp_path),
+            "--json",
+        ]
+    )
+
+    assert result == 0
+    assert captured["browser_mode"] == "external"
+    assert captured["callback_port"] == 43123
+    assert captured["auth_timeout"] == 900
+    assert callable(captured["auth_event_callback"])
+    output = capsys.readouterr()
+    assert json.loads(output.out)["ok"] is True
+    event_line = next(
+        line for line in output.err.splitlines() if line.startswith("HAPSIGN_EVENT=")
+    )
+    event = json.loads(event_line.removeprefix("HAPSIGN_EVENT="))
+    assert event["verification_uri"] == "https://example.invalid/one-time"
+
+
+def test_json_auth_event_has_stable_prefix(capsys) -> None:
+    args = cli.build_parser().parse_args(["auth", "--events", "json"])
+    callback = cli._auth_event_callback(args)
+    callback(
+        {
+            "event": "auth_required",
+            "method": "ssh_loopback",
+            "reason": "ssh",
+            "verification_uri": "https://example.invalid/one-time",
+            "callback_host": "127.0.0.1",
+            "callback_port": 43123,
+            "expires_in": 600,
+        }
+    )
+
+    stderr = capsys.readouterr().err.strip()
+    assert stderr.startswith("HAPSIGN_EVENT=")
+    event = json.loads(stderr.removeprefix("HAPSIGN_EVENT="))
+    assert event["event"] == "auth_required"
+    assert event["callback_port"] == 43123
+
+
+def test_headless_auth_event_explains_loopback_forwarding(capsys) -> None:
+    args = cli.build_parser().parse_args(["auth"])
+    callback = cli._auth_event_callback(args)
+    callback(
+        {
+            "event": "auth_required",
+            "method": "loopback_forwarding",
+            "reason": "headless",
+            "verification_uri": "https://example.invalid/one-time",
+            "callback_host": "127.0.0.1",
+            "callback_port": 43123,
+            "expires_in": 600,
+        }
+    )
+
+    stderr = capsys.readouterr().err
+    assert "ssh -N -L 127.0.0.1:43123:127.0.0.1:43123" in stderr
+    assert "不要公网暴露端口" in stderr
+    assert "https://example.invalid/one-time" in stderr
 
 
 def test_sign_rejects_serial_and_device_udid_together(capsys) -> None:
@@ -439,7 +577,7 @@ def test_sign_accepts_explicit_udid_and_prints_json(
     assert payload["ok"] is True
     assert payload["command"] == "sign"
     assert payload["installed"] is False
-    assert payload["browser_mode"] == "system_controlled"
+    assert payload["browser_mode"] == "auto"
     assert payload["migration_warnings"] == []
     assert Path(payload["signed_hap"]).is_absolute()
     assert captured["install_after_sign"] is False
