@@ -44,8 +44,11 @@ BREAKING_CHANGES: tuple[dict[str, object], ...] = (
         "decision": "accepted",
         "compatibility_strategy": "configuration",
         "compatibility_options": ("--browser system", "HAPSIGN_BROWSER=system"),
-        "summary": "CLI 默认浏览器由 system 改为 system_controlled",
-        "impact": "授权使用隔离的 Edge/Chrome 上下文，不复用默认浏览器的 cookie。",
+        "summary": "CLI 默认浏览器由 system 改为 auto",
+        "impact": (
+            "桌面授权优先使用隔离浏览器；SSH、CI 或无桌面 Linux 会话改为"
+            "外部浏览器交接。"
+        ),
         "remediation": (
             "需要原行为时传入 --browser system，或设置 HAPSIGN_BROWSER=system。"
         ),

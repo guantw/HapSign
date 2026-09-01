@@ -88,15 +88,27 @@ Interpret doctor capabilities separately:
 
    ```text
    <cli> sign --hap <absolute-input.hap> \
-     --output <absolute-output.hap> --browser system_controlled --json
+     --output <absolute-output.hap> --browser auto --events json --json
    ```
 
-   `system_controlled` uses an isolated Edge/Chrome context without the user's
-   cookies or saved passwords and grants the authorization page local callback
-   access. Use `system` only when the user explicitly prefers their normal
-   browser profile or controlled launch is unavailable; disclose that cached
-   SSO state, extensions, and local-network permissions can change the flow.
-   Use `playwright` only when bundled Chromium is explicitly preferred.
+   `auto` uses an isolated Edge/Chrome context in a visible desktop session.
+   In SSH, CI, or a headless Linux session it emits an `auth_required` event
+   instead of launching an invisible browser. `system_controlled` forces the isolated
+   browser, `system` uses the user's normal browser profile, and `playwright`
+   explicitly prefers bundled Chromium.
+
+   A first-time login or reauthentication after cache rejection does not support
+   a completely browserless, terminal-only flow. An external flow removes the
+   desktop requirement from the CLI host, but the user still needs a modern
+   browser on some computer and a secure same-port loopback forwarding path.
+   A cached token that the service still accepts can be reused without opening a
+   browser for that invocation.
+
+   Real user-visible source CLI login has been verified on Windows 11 Pro 64-bit
+   with isolated Edge, and Ubuntu 24.04.4 LTS x86_64 under WSL2 with the Windows
+   default browser. This covers the login page, loopback callback, token exchange,
+   and platform cache reuse. Do not extend that claim to native Linux or remote
+   SSH, macOS, GUI, USB, signing, or installation without separate validation.
 
    If persistent locations matter, pass absolute `--state-dir` and either an
    exact `--output` or `--output-dir`. CLI flags override
@@ -111,9 +123,23 @@ Interpret doctor capabilities separately:
    requires it.
 
 4. If authorization opens, tell the user to complete login, CAPTCHA, consent,
-   and two-factor verification manually, then wait for the process. Never
-   request, read, store, type, or automate credentials, CAPTCHA, one-time codes,
-   consent clicks, or tokens.
+   and two-factor verification manually, then wait for the process. If stderr
+   emits `HAPSIGN_EVENT=` with `event: auth_required` and `method` set to
+   `ssh_loopback` or `loopback_forwarding`, keep the process running and give
+   the user the exact same-port SSH forwarding command described by
+   `callback_port` when the host is reachable by SSH:
+
+   ```text
+   ssh -N -L 127.0.0.1:<port>:127.0.0.1:<port> <same-SSH-target>
+   ```
+
+   For a container or another remote runtime, use its equivalent private port
+   forwarding instead of exposing the callback publicly. Tell the user to open
+   `verification_uri` only on the computer that owns the forwarded loopback
+   port. Treat that URI as an ephemeral secret: do not put
+   it in persistent logs or share it beyond the authorizing user. Never expose
+   the callback on `0.0.0.0`, and never request, read, store, type, or automate
+   credentials, CAPTCHA, one-time codes, consent clicks, or tokens.
 
 5. Treat a nonzero exit code or JSON `ok: false` as failure. On success, read
    `signed_hap` from JSON instead of guessing a path, then verify it:
@@ -142,6 +168,9 @@ Keep logs at a nonsensitive level and use stage markers:
 
 - No `[callback]` entry: the browser did not reach the loopback callback;
   check browser mode and local-network access.
+- `auth_required` with `method: ssh_loopback` or `loopback_forwarding`: verify
+  the local and remote forwarded ports are identical and the browser is on the
+  forwarding computer.
 - Callback POST/GET without `授权回调校验成功`: inspect the redacted CSRF or
   parameter error.
 - Callback validation succeeded: browser spinning or subsequent

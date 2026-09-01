@@ -5,6 +5,24 @@
 源码安装后的命令名是 `hapsign`；便携版使用 `hapsign-cli.exe`（Windows）或
 `./hapsign-cli`（Linux/macOS），其余参数和结果完全相同。
 
+## 认证规格边界与验证范围
+
+首次认证以及缓存失效后的重新认证，不支持完全无浏览器的纯命令行闭环。Linux CLI
+可以运行在 SSH、CI 或无桌面环境中，但用户必须能在另一台有现代浏览器的电脑上打开
+一次性登录地址，并通过同端口 loopback 转发把回调安全送回 CLI。“Linux 主机不需要
+桌面”不表示整个认证过程不需要浏览器。已有且仍被服务端接受的 Token 缓存可以直接
+复用，此时本次调用不需要打开浏览器。
+
+源码 CLI 的用户可见真实登录已在以下环境验证：
+
+- Windows 11 专业版 64 位：`auto` 启动隔离 Edge，完成 loopback 回调、Token 换取、
+  DPAPI 缓存和缓存复用
+- Ubuntu 24.04.4 LTS x86_64（WSL2）：`auto` 调用 Windows 默认浏览器，完成跨 WSL
+  loopback 回调、Token 换取、`0o600` 缓存和缓存复用
+
+该结果不覆盖原生 Linux/远程 SSH、macOS、GUI、USB 或完整签名安装链路；未列入不
+等同于不支持，但发布前应在目标环境执行相应回归。
+
 ## 稳定调用顺序
 
 ### 1. 诊断运行环境
@@ -58,7 +76,7 @@ Real Profile 使用 `system-basic`。不能从旧元数据可靠推断类型，�
 hapsign sign \
   --hap app.hap \
   --output artifacts/app-signed.hap \
-  --browser system_controlled \
+  --browser auto \
   --json
 ```
 
@@ -67,17 +85,29 @@ hapsign sign \
 拒绝时尝试刷新。agent 应提示用户在浏览器中完成必要的授权，然后继续等待进程退出。
 成功结果的 `signed_hap` 是可交付产物的绝对路径。
 
-Agent 默认应显式使用 `system_controlled`：它调用系统 Edge/Chrome，但使用隔离的临时
-上下文，不复用用户 cookie、已保存密码或旧 SSO 状态，并可预授予登录页访问 loopback
-回调的权限。`system` 会打开用户的普通默认浏览器 Profile，仅在用户明确希望复用登录
-状态或受控浏览器不可用时使用；浏览器扩展、旧 cookie 和本地网络权限可能改变授权流程。
+Agent 默认使用 `auto`。普通桌面会话会调用受控 Edge/Chrome；SSH、CI 或无桌面 Linux
+会话会输出 `auth_required` 交接信息，而不是尝试启动不可见的浏览器。`system_controlled`
+可强制使用隔离的临时浏览器上下文；`system` 会复用用户普通默认浏览器 Profile。
+
+交接事件包含一次性 `verification_uri` 和 `callback_port`。`method=ssh_loopback` 或
+`loopback_forwarding` 时，Agent 应提示用户保持原命令运行，并在有浏览器的电脑建立
+同端口 loopback 转发：
+
+```bash
+ssh -N -L 127.0.0.1:<端口>:127.0.0.1:<端口> <同一SSH目标>
+```
+
+容器等运行时应使用其等价的私有端口转发能力。然后在建立转发的电脑打开一次性地址。
+`--events json` 会把事件以
+`HAPSIGN_EVENT=<json>` 写到 stderr；stdout 仍只在命令结束时输出一个 JSON 文档。
+不得把登录地址写入持久日志，也不得把回调服务暴露到 `0.0.0.0`。
 
 首次申请调试 Profile 需要设备 UDID。可以连接一台已授权调试设备让 HDC 自动读取，
 也可以由调用方提供已核实的值：
 
 ```bash
 hapsign sign --hap app.hap --device-udid <64位十六进制UDID> \
-  --browser system_controlled --json
+  --browser auto --json
 ```
 
 当日 `metadata.json` 中的 `.p12/.cer/.p7b` 仍有效，且包名、能力模式与已知设备
@@ -124,6 +154,8 @@ hapsign install --hap app-signed.hap --serial <serial> --json
 ## 授权诊断
 
 - 没有任何 `[callback]`：浏览器没有访问 loopback，检查浏览器模式和本地网络权限。
+- `auth_required` 的 `method=ssh_loopback` 或 `loopback_forwarding`：确认本地端口和
+  远端回调端口完全相同，并且浏览器运行在建立转发的那台电脑上。
 - 收到 POST/GET 但没有“授权回调校验成功”：检查脱敏后的 CSRF 或参数错误。
 - 已校验成功：浏览器继续转圈或随后出现 `net::ERR_ABORTED` 通常是回调后关闭页面产生；
   应继续检查 token 交换和后续签名阶段。

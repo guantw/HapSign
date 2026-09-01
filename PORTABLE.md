@@ -17,8 +17,24 @@
 ```bash
 ./hapsign-cli doctor --json
 ./hapsign-cli sign --hap app.hap --output app-signed.hap \
-  --browser system_controlled --json
+  --browser auto --json
 ```
+
+CLI 的 `auto` 模式在 SSH、CI 或无桌面 Linux 会话中会显示一次性登录地址和 callback
+端口。保持命令运行，在有浏览器的电脑按提示建立同端口 SSH loopback 转发后打开该
+地址；容器等运行时使用其等价的私有端口转发能力。
+`--events json` 可输出带 `HAPSIGN_EVENT=` 前缀的结构化交接事件；最终 stdout JSON
+协议不变。首次认证仍需要现代浏览器，CLI 不会收集账号密码或验证码。
+
+> [!IMPORTANT]
+> 首次认证以及缓存失效后的重新认证，不支持完全无浏览器的纯命令行闭环。无桌面
+> Linux 可以运行 CLI，但必须能使用另一台有现代浏览器的电脑，并将同一 loopback
+> 端口安全转发回 CLI。已有且仍有效的 Token 缓存可直接复用，无需每次打开浏览器。
+
+本登录实现已在 Windows 11 专业版 64 位，以及 Ubuntu 24.04.4 LTS x86_64（WSL2）
+完成源码 CLI 真实登录验证。验证覆盖用户可见登录页、loopback 回调、Token 换取和
+平台缓存复用；不包含原生 Linux/远程 SSH、macOS、GUI、USB 或完整签名安装链路，
+这些场景仍需分别回归。
 
 Windows PowerShell 使用 `.\hapsign-cli.exe`。完整约定见 `AGENT_SIGNING.md`；升级
 已有安装前请查看 `MIGRATIONS.md`，或读取 `doctor --json` 的机器可读变更目录。

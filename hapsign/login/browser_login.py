@@ -1,4 +1,4 @@
-"""Playwright 浏览器登录模块。
+"""跨平台浏览器登录与 loopback 回调模块。
 
 使用 Playwright 打开华为 OAuth 登录页，用户在浏览器中手动登录，
 通过本地 HTTP 服务拦截回调拿到 tempToken。
@@ -12,30 +12,96 @@
   6. 校验 code（CSRF），返回 tempToken
 """
 
+import base64
+import hmac
 import json
 import logging
 import os
+import platform
+import shutil
+import socket
+import subprocess
+import sys
 import threading
 import time
 import uuid
 import webbrowser
+from collections.abc import Callable
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Literal, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 from hapsign.cancellation import OperationCancelled, raise_if_cancelled
 from hapsign.config import APP_ID, BASE_URL, LOGIN_AUTH_PATH, LOGIN_SUCCESS_PATH
-from hapsign.diagnostics import sensitive_logging_enabled
+from hapsign.diagnostics import redact_sensitive_text, sensitive_logging_enabled
 
 logger = logging.getLogger(__name__)
 
-# 回调超时（秒）—— 给用户足够时间处理验证码/二次验证
-_CALLBACK_TIMEOUT = 300
+# 回调超时（秒）—— 外部浏览器交接需要给用户留出建立隧道和处理二次验证的时间。
+DEFAULT_AUTH_TIMEOUT = 600
+BROWSER_MODES = ("auto", "external", "system", "system_controlled", "playwright")
 _CALLBACK_HOST = "127.0.0.1"
 _MAX_CALLBACK_BODY_SIZE = 64 * 1024
 _CONTROLLED_SYSTEM_CHANNELS = ("msedge", "chrome")
+
+
+class AuthRequiredEvent(TypedDict):
+    """首次认证需要用户接管浏览器时发布的稳定事件结构。"""
+
+    event: Literal["auth_required"]
+    method: Literal["manual_loopback", "ssh_loopback", "loopback_forwarding"]
+    reason: str
+    verification_uri: str
+    callback_host: str
+    callback_port: int
+    expires_in: int
+
+
+AuthEventCallback = Callable[[AuthRequiredEvent], None]
+
+
+class BrowserUnavailableError(RuntimeError):
+    """当前会话无法启动可见浏览器，但仍可交接到外部浏览器。"""
+
+
+class _CallbackHTTPServer(ThreadingHTTPServer):
+    """独占 loopback 端口，避免 Windows 上多个登录会话复用同一端口。"""
+
+    # POSIX 的 SO_REUSEADDR 允许固定端口跨 TIME_WAIT 快速重试，但不会允许两个
+    # 活跃 TCP listener 绑定同一地址；Windows 则配合 SO_EXCLUSIVEADDRUSE 禁用它。
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_EXCLUSIVEADDRUSE,
+                1,
+            )
+        super().server_bind()
+
+
+def _browser_environment() -> str:
+    """识别影响可见浏览器启动方式的运行环境。"""
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return "ssh"
+    if os.environ.get("CI"):
+        return "headless"
+    if not sys.platform.startswith("linux"):
+        return "desktop"
+    release = platform.release().lower()
+    if (
+        os.environ.get("WSL_INTEROP")
+        or os.environ.get("WSL_DISTRO_NAME")
+        or "microsoft" in release
+    ):
+        return "wsl"
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return "desktop"
+    return "headless"
 
 
 def _parse_multipart(body: bytes, content_type: str) -> dict[str, str]:
@@ -152,7 +218,7 @@ def _make_callback_handler(
                 logger.debug("[callback] sensitive params=%r", params)
 
             received_code = params.get("code", "")
-            if received_code != expected_code:
+            if not hmac.compare_digest(received_code, expected_code):
                 logger.warning("[callback] CSRF code mismatch")
                 self._send_text(400, "invalid csrf code")
                 return
@@ -260,11 +326,22 @@ class BrowserLogin:
         self,
         browser_mode: str | None = None,
         cancel_event: threading.Event | None = None,
+        callback_port: int = 0,
+        callback_timeout: int = DEFAULT_AUTH_TIMEOUT,
+        event_callback: AuthEventCallback | None = None,
     ):
         self.browser_mode = (
             browser_mode or os.environ.get("HAPSIGN_BROWSER", "system_controlled")
         ).lower()
         self.cancel_event = cancel_event
+        if not 0 <= callback_port <= 65535:
+            raise ValueError("callback_port must be between 0 and 65535")
+        if callback_timeout <= 0:
+            raise ValueError("callback_timeout must be greater than zero")
+        self.callback_port = callback_port
+        self.callback_timeout = callback_timeout
+        self.event_callback = event_callback
+        self._active_callback_port = 0
 
     def login(self, country: str = "CN") -> str:
         """打开华为登录页，用户手动登录，拦截回调拿 tempToken。
@@ -284,30 +361,55 @@ class BrowserLogin:
         callback_event = threading.Event()
         handler_class = _make_callback_handler(csrf_code, callback_data, callback_event)
         # 直接让 HTTPServer 绑定临时端口，消除“先探测、后绑定”的端口竞争窗口。
-        server = ThreadingHTTPServer((_CALLBACK_HOST, 0), handler_class)
+        try:
+            server = _CallbackHTTPServer(
+                (_CALLBACK_HOST, self.callback_port),
+                handler_class,
+            )
+        except OSError as exc:
+            requested = self.callback_port or "automatic"
+            raise RuntimeError(
+                f"Unable to bind callback port {requested} on {_CALLBACK_HOST}: {exc}"
+            ) from exc
         server.daemon_threads = True
         server.block_on_close = False
         port = server.server_address[1]
+        self._active_callback_port = port
         login_url = (
             f"{BASE_URL}/{LOGIN_AUTH_PATH}?port={port}&appid={APP_ID}&code={csrf_code}"
         )
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
-
-        logger.info("[LOGIN] callback port=%d", port)
-        logger.info("[LOGIN] callback server listening on %s:%d", _CALLBACK_HOST, port)
-        logger.info("[LOGIN] browser mode=%s", self.browser_mode)
-        if sensitive_logging_enabled():
-            logger.debug("[LOGIN] sensitive login_url=%s", login_url)
-
         try:
+            server_thread.start()
+            logger.info("[LOGIN] callback port=%d", port)
+            logger.info(
+                "[LOGIN] callback server listening on %s:%d",
+                _CALLBACK_HOST,
+                port,
+            )
+            logger.info("[LOGIN] browser mode=%s", self.browser_mode)
+            if sensitive_logging_enabled():
+                logger.debug("[LOGIN] sensitive login_url=%s", login_url)
+
             # ── 5. 启动浏览器，等待回调 ──
-            self._browser_login_and_wait(login_url, callback_event)
+            try:
+                self._browser_login_and_wait(login_url, callback_event)
+            except OperationCancelled:
+                raise
+            except Exception:
+                if not callback_event.is_set():
+                    raise
+                # 授权页回调成功后通常立即跳转/关闭，浏览器驱动可能同时报告
+                # navigation aborted、target closed 等错误；回调结果才是权威状态。
+                logger.info("[login] 已收到授权回调，忽略随后发生的浏览器关闭异常")
         finally:
             # ── 6. 关闭 HTTP 服务 ──
-            server.shutdown()
+            if server_thread.is_alive():
+                server.shutdown()
             server.server_close()
-            server_thread.join(timeout=2)
+            if server_thread.is_alive():
+                server_thread.join(timeout=2)
+            self._active_callback_port = 0
 
         # ── 7. 校验并返回 tempToken ──
         temp_token = callback_data.get("tempToken", "")
@@ -327,6 +429,63 @@ class BrowserLogin:
         callback_event: threading.Event,
     ) -> None:
         """按配置启动系统浏览器或 Playwright。"""
+        if self.browser_mode == "auto":
+            environment = _browser_environment()
+            if environment in {"ssh", "headless"}:
+                self._external_browser_login_and_wait(
+                    login_url,
+                    callback_event,
+                    reason=environment,
+                )
+                return
+            if environment == "wsl":
+                try:
+                    self._wsl_host_browser_login_and_wait(login_url, callback_event)
+                    return
+                except BrowserUnavailableError as exc:
+                    if callback_event.is_set():
+                        return
+                    logger.warning(
+                        "[login] WSL 宿主浏览器不可用：%s",
+                        redact_sensitive_text(exc),
+                    )
+                    self._external_browser_login_and_wait(
+                        login_url,
+                        callback_event,
+                        reason="wsl_browser_unavailable",
+                    )
+                    return
+            try:
+                self._playwright_login_and_wait(login_url, callback_event)
+            except BrowserUnavailableError as exc:
+                if callback_event.is_set():
+                    return
+                logger.warning(
+                    "[login] 本地受控浏览器不可用：%s",
+                    redact_sensitive_text(exc),
+                )
+                try:
+                    self._system_browser_login_and_wait(login_url, callback_event)
+                except BrowserUnavailableError as system_exc:
+                    if callback_event.is_set():
+                        return
+                    logger.warning(
+                        "[login] 系统默认浏览器不可用：%s",
+                        redact_sensitive_text(system_exc),
+                    )
+                    self._external_browser_login_and_wait(
+                        login_url,
+                        callback_event,
+                        reason="browser_unavailable",
+                    )
+            return
+        if self.browser_mode == "external":
+            self._external_browser_login_and_wait(
+                login_url,
+                callback_event,
+                reason=_browser_environment(),
+            )
+            return
         if self.browser_mode == "system":
             self._system_browser_login_and_wait(login_url, callback_event)
             return
@@ -335,17 +494,64 @@ class BrowserLogin:
             return
         raise RuntimeError(
             f"Unsupported browser mode: {self.browser_mode}. "
-            "Use 'system_controlled', 'playwright' or 'system'."
+            "Use 'auto', 'external', 'system_controlled', 'playwright' or 'system'."
         )
 
+    def _emit_event(self, event: AuthRequiredEvent) -> None:
+        if self.event_callback is not None:
+            self.event_callback(event)
+            return
+        if event.get("event") == "auth_required":
+            print(
+                "External browser login required. Open this one-time URL:\n"
+                f"{event['verification_uri']}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _external_browser_login_and_wait(
+        self,
+        login_url: str,
+        callback_event: threading.Event,
+        *,
+        reason: str,
+    ) -> None:
+        """不启动浏览器，发布一次性交接信息并等待 loopback 回调。"""
+        raise_if_cancelled(self.cancel_event)
+        environment = _browser_environment()
+        if environment == "ssh":
+            method = "ssh_loopback"
+        elif environment == "headless":
+            method = "loopback_forwarding"
+        else:
+            method = "manual_loopback"
+        self._emit_event(
+            {
+                "event": "auth_required",
+                "method": method,
+                "reason": reason,
+                "verification_uri": login_url,
+                "callback_host": _CALLBACK_HOST,
+                "callback_port": self._active_callback_port,
+                "expires_in": self.callback_timeout,
+            }
+        )
+        logger.info(
+            "[login] 已等待外部浏览器授权：method=%s callback=%s:%d",
+            method,
+            _CALLBACK_HOST,
+            self._active_callback_port,
+        )
+        self._wait_for_callback(callback_event)
+
     def _wait_for_callback(self, callback_event: threading.Event) -> None:
-        deadline = time.monotonic() + _CALLBACK_TIMEOUT
+        deadline = time.monotonic() + self.callback_timeout
         while not callback_event.wait(timeout=0.1):
             raise_if_cancelled(self.cancel_event)
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     "Login timed out: no callback received within "
-                    f"{_CALLBACK_TIMEOUT}s. "
+                    f"{self.callback_timeout}s. "
                     "Please check your network and complete login in the browser."
                 )
 
@@ -356,18 +562,76 @@ class BrowserLogin:
     ) -> None:
         """使用系统默认浏览器完成登录，不引入 Chromium 运行时。"""
         raise_if_cancelled(self.cancel_event)
-        if not webbrowser.open(login_url, new=1, autoraise=True):
-            raise RuntimeError(
+        try:
+            opened = webbrowser.open(login_url, new=1, autoraise=True)
+        except (OSError, webbrowser.Error) as exc:
+            raise BrowserUnavailableError(
+                f"Unable to open the system browser: {redact_sensitive_text(exc)}"
+            ) from exc
+        if not opened:
+            raise BrowserUnavailableError(
                 "Unable to open the system browser. "
                 "Set HAPSIGN_BROWSER=playwright to use the optional backend."
             )
         logger.info("[login] 登录页面已在系统浏览器中打开")
         logger.info(
             "[login] 正在等待登录回调（最多 %s 秒，可处理验证码或二次验证）",
-            _CALLBACK_TIMEOUT,
+            self.callback_timeout,
         )
         raise_if_cancelled(self.cancel_event)
         self._wait_for_callback(callback_event)
+
+    def _wsl_host_browser_login_and_wait(
+        self,
+        login_url: str,
+        callback_event: threading.Event,
+    ) -> None:
+        """从 WSL 调用 Windows 宿主浏览器，并在 WSL loopback 等待回调。"""
+        raise_if_cancelled(self.cancel_event)
+        commands: list[tuple[str, list[str]]] = []
+        wslview = shutil.which("wslview")
+        if wslview:
+            commands.append(("wslview", [wslview, login_url]))
+        powershell = shutil.which("powershell.exe")
+        if powershell:
+            quoted_url = login_url.replace("'", "''")
+            encoded_command = base64.b64encode(
+                f"Start-Process -FilePath '{quoted_url}'".encode("utf-16le")
+            ).decode("ascii")
+            commands.append(
+                (
+                    "powershell.exe",
+                    [
+                        powershell,
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-EncodedCommand",
+                        encoded_command,
+                    ],
+                )
+            )
+        failures: list[str] = []
+        for runtime_name, command in commands:
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                # TimeoutExpired 等异常会把完整 argv 放进字符串；wslview argv
+                # 含一次性 URL，PowerShell argv 含其可逆编码，因此只记录类型。
+                failures.append(f"{runtime_name}: {type(exc).__name__}")
+                continue
+            if result.returncode == 0:
+                logger.info("[login] 登录页面已通过 %s 在 Windows 中打开", runtime_name)
+                self._wait_for_callback(callback_event)
+                return
+            failures.append(f"{runtime_name}: exit {result.returncode}")
+        detail = " | ".join(failures) if failures else "no WSL browser bridge found"
+        raise BrowserUnavailableError(detail)
 
     def _playwright_login_and_wait(
         self,
@@ -391,19 +655,28 @@ class BrowserLogin:
             from playwright.sync_api import TimeoutError as PwTimeout
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
-            raise RuntimeError(
+            raise BrowserUnavailableError(
                 "Playwright not installed. Run:\n"
                 "  pip install playwright\n"
                 "  playwright install chromium"
             ) from exc
 
+        page_ready = False
         try:
             with sync_playwright() as pw:
-                browser, runtime_name = _launch_controlled_browser(
-                    pw,
-                    self.browser_mode,
-                    allow_fallback=True,
+                preferred_mode = (
+                    "system_controlled"
+                    if self.browser_mode == "auto"
+                    else self.browser_mode
                 )
+                try:
+                    browser, runtime_name = _launch_controlled_browser(
+                        pw,
+                        preferred_mode,
+                        allow_fallback=True,
+                    )
+                except RuntimeError as exc:
+                    raise BrowserUnavailableError(str(exc)) from exc
                 logger.info("[login] 受控浏览器已启动：%s", runtime_name)
                 context = browser.new_context(
                     viewport={"width": 1280, "height": 800},
@@ -439,28 +712,38 @@ class BrowserLogin:
                 page.on("requestfailed", log_request_failure)
                 page.on(
                     "pageerror",
-                    lambda error: logger.warning("[login] 页面脚本错误：%s", error),
+                    lambda error: logger.warning(
+                        "[login] 页面脚本错误：%s",
+                        redact_sensitive_text(error),
+                    ),
                 )
 
                 # 使用 domcontentloaded，避免持续网络请求让 networkidle 超时。
                 try:
                     page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
                 except PwTimeout as exc:
-                    raise RuntimeError("Login page load timed out") from exc
+                    raise BrowserUnavailableError("Login page load timed out") from exc
 
+                page_ready = True
                 logger.info("[login] 登录页面已打开，请在浏览器中完成登录")
                 logger.info(
                     "[login] 正在等待登录回调（最多 %s 秒，可处理验证码或二次验证）",
-                    _CALLBACK_TIMEOUT,
+                    self.callback_timeout,
                 )
 
                 self._wait_for_callback(callback_event)
                 browser.close()
 
-        except (RuntimeError, OperationCancelled):
+        except (BrowserUnavailableError, OperationCancelled):
             raise
-        except Exception as e:
-            raise RuntimeError(f"Browser operation failed: {e}") from e
+        except Exception as exc:
+            if not page_ready:
+                raise BrowserUnavailableError(
+                    f"Controlled browser startup failed: {exc}"
+                ) from exc
+            if isinstance(exc, RuntimeError):
+                raise
+            raise RuntimeError(f"Browser operation failed: {exc}") from exc
 
 
 def _launch_controlled_browser(

@@ -18,6 +18,12 @@ from hapsign import __version__
 from hapsign.cancellation import OperationCancelled
 from hapsign.config import DEVICE_TYPE_PHONE
 from hapsign.diagnostics import redact_sensitive_text
+from hapsign.login.browser_login import (
+    BROWSER_MODES,
+    DEFAULT_AUTH_TIMEOUT,
+    AuthEventCallback,
+    AuthRequiredEvent,
+)
 from hapsign.migrations import (
     breaking_changes,
     cache_compatibility_warning,
@@ -41,13 +47,13 @@ from hapsign.signing.hap_inspect import is_hap_signed
 from hapsign.signing.installer import Installer
 from hapsign.token import secure_token_cache
 
-_BROWSER_MODES = ("system", "system_controlled", "playwright")
+_AUTH_EVENT_FORMATS = ("human", "json")
 
 
 def _default_browser_mode() -> str:
     """返回可复现的 CLI 浏览器默认值，并允许显式环境变量覆盖。"""
-    configured = os.environ.get("HAPSIGN_BROWSER", "system_controlled").lower()
-    return configured if configured in _BROWSER_MODES else "system_controlled"
+    configured = os.environ.get("HAPSIGN_BROWSER", "auto").lower()
+    return configured if configured in BROWSER_MODES else "auto"
 
 
 COMMANDS = {
@@ -109,6 +115,59 @@ def _nonempty_serial(value: str) -> str:
     if not serial:
         raise argparse.ArgumentTypeError("--serial 不能为空")
     return serial
+
+
+def _callback_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("回调端口必须是整数") from exc
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError("回调端口必须在 0 到 65535 之间")
+    return port
+
+
+def _auth_timeout(value: str) -> int:
+    try:
+        timeout = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("认证超时必须是整数秒") from exc
+    if not 30 <= timeout <= 3600:
+        raise argparse.ArgumentTypeError("认证超时必须在 30 到 3600 秒之间")
+    return timeout
+
+
+def _add_auth_interaction_options(
+    parser: argparse.ArgumentParser,
+    *,
+    help_prefix: str,
+) -> None:
+    parser.add_argument(
+        "--browser",
+        choices=BROWSER_MODES,
+        default=_default_browser_mode(),
+        help=f"{help_prefix}浏览器模式；默认 auto（无桌面时交接到外部浏览器）",
+    )
+    parser.add_argument(
+        "--callback-port",
+        type=_callback_port,
+        default=0,
+        metavar="PORT",
+        help="loopback 回调端口；默认 0 自动分配，SSH 转发故障时可固定端口",
+    )
+    parser.add_argument(
+        "--auth-timeout",
+        type=_auth_timeout,
+        default=DEFAULT_AUTH_TIMEOUT,
+        metavar="SECONDS",
+        help=f"等待浏览器授权的秒数；默认 {DEFAULT_AUTH_TIMEOUT}",
+    )
+    parser.add_argument(
+        "--events",
+        choices=_AUTH_EVENT_FORMATS,
+        default="human",
+        help="认证中间事件格式；human 或带 HAPSIGN_EVENT= 前缀的 json",
+    )
 
 
 def _add_hap_identity_options(parser: argparse.ArgumentParser) -> None:
@@ -194,12 +253,7 @@ def _add_signing_options(
         help="签名平台注册的设备类型码；默认 4（手机/平板/2in1）",
     )
     _add_path_options(parser, include_exact_output=True)
-    parser.add_argument(
-        "--browser",
-        choices=_BROWSER_MODES,
-        default=_default_browser_mode(),
-        help="首次认证使用的浏览器模式；默认 system_controlled",
-    )
+    _add_auth_interaction_options(parser, help_prefix="首次认证使用的")
     _add_capability_option(parser)
     parser.add_argument(
         "--refresh-token",
@@ -293,8 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=_formatter,
         epilog="""\
 示例:
-  hapsign auth --json                 # 有缓存则复用，否则打开浏览器
-  hapsign auth --refresh --json       # 强制重新浏览器认证
+  hapsign auth --json                 # 有缓存则复用，否则自动打开或交接浏览器
+  hapsign auth --refresh --json       # 强制重新浏览器认证或外部交接
   hapsign auth status --json          # 只检查本地缓存，不验证服务端有效性
 """,
     )
@@ -306,12 +360,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="login（默认）或 status",
     )
     auth.add_argument("--country", default="CN", help="华为账号国家码；默认 CN")
-    auth.add_argument(
-        "--browser",
-        choices=_BROWSER_MODES,
-        default=_default_browser_mode(),
-        help="认证浏览器模式；默认 system_controlled",
-    )
+    _add_auth_interaction_options(auth, help_prefix="认证")
     auth.add_argument(
         "--refresh",
         action="store_true",
@@ -662,6 +711,56 @@ def _run_migrate_cache(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _auth_event_callback(args: argparse.Namespace) -> AuthEventCallback:
+    event_format = args.events
+
+    def emit(event: AuthRequiredEvent) -> None:
+        if event_format == "json":
+            payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+            print(f"HAPSIGN_EVENT={payload}", file=sys.stderr, flush=True)
+            return
+        if event.get("event") != "auth_required":
+            return
+        port = int(event["callback_port"])
+        print("\n需要在外部浏览器中完成华为账号登录。", file=sys.stderr)
+        print("请保持当前 HapSign 命令运行。", file=sys.stderr)
+        if event["method"] == "ssh_loopback":
+            print("在有浏览器的电脑上另开终端并建立 SSH 转发：", file=sys.stderr)
+            print(
+                f"  ssh -N -L 127.0.0.1:{port}:127.0.0.1:{port} <同一SSH目标>",
+                file=sys.stderr,
+            )
+            print("然后在该电脑的浏览器中打开一次性地址：", file=sys.stderr)
+        elif event["method"] == "loopback_forwarding":
+            print(
+                "当前环境没有可见桌面，浏览器电脑必须安全转发到此 loopback 端口。",
+                file=sys.stderr,
+            )
+            print("若当前主机可通过 SSH 访问，可使用：", file=sys.stderr)
+            print(
+                f"  ssh -N -L 127.0.0.1:{port}:127.0.0.1:{port} <同一SSH目标>",
+                file=sys.stderr,
+            )
+            print(
+                "容器或其他远程运行时请使用其等价的私有端口转发；不要公网暴露端口。",
+                file=sys.stderr,
+            )
+            print("然后在负责转发的电脑浏览器中打开一次性地址：", file=sys.stderr)
+        else:
+            print(
+                "请在能够访问当前 loopback 回调的浏览器中打开一次性地址：",
+                file=sys.stderr,
+            )
+        print(f"  {event['verification_uri']}", file=sys.stderr)
+        print(
+            f"地址将在 {event['expires_in']} 秒后失效；不要分享或写入日志。\n",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return emit
+
+
 def _auth_pipeline(args: argparse.Namespace) -> SignPipeline:
     state_dir = str(Path(args.state_dir).expanduser().resolve())
     return SignPipeline(
@@ -671,6 +770,9 @@ def _auth_pipeline(args: argparse.Namespace) -> SignPipeline:
         state_dir=state_dir,
         country=args.country,
         browser_mode=args.browser,
+        callback_port=args.callback_port,
+        auth_timeout=args.auth_timeout,
+        auth_event_callback=_auth_event_callback(args),
         keep_signed_hap=False,
         install_after_sign=False,
     )
@@ -762,6 +864,9 @@ def _build_sign_pipeline(
         force_refresh_token=args.refresh_token,
         force_refresh_signing=args.refresh_signing,
         browser_mode=args.browser,
+        callback_port=args.callback_port,
+        auth_timeout=args.auth_timeout,
+        auth_event_callback=_auth_event_callback(args),
         signed_output_dir=str(output_dir),
         signed_output_path=args.output,
         overwrite_output=args.overwrite_output,
