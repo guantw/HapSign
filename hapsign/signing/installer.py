@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 _HDC_SERVER_HOST = "127.0.0.1"
 _HDC_SERVER_PORT = 8710
+_HDC_OUTPUT_ENCODING = "utf-8"
+_HDC_OUTPUT_ERRORS = "replace"
 
 # hdc start 调用时刻与监听进程创建时刻比较时允许的时钟偏差（秒）
 _CLOCK_SKEW_SECONDS = 2.0
@@ -47,20 +49,19 @@ def _listener_pid() -> int | None:
 
 
 def _listener_pid_windows() -> int | None:
-    """解析 netstat 输出，取本地监听 8710 的 PID。"""
+    """从 netstat 原始字节中解析本地监听 8710 的 PID。"""
     try:
         result = subprocess.run(
             ["netstat", "-ano", "-p", "TCP"],
             capture_output=True,
-            text=True,
             timeout=10,
             **no_window_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
     # 监听套接字的远端地址恒为 0.0.0.0:0，状态列文本在不同语言环境可能不同
-    pattern = re.compile(r"TCP\s+127\.0\.0\.1:8710\s+0\.0\.0\.0:0\s+\S+\s+(\d+)\s*$")
-    for line in result.stdout.splitlines():
+    pattern = re.compile(rb"TCP\s+127\.0\.0\.1:8710\s+0\.0\.0\.0:0\s+\S+\s+(\d+)\s*$")
+    for line in (result.stdout or b"").splitlines():
         match = pattern.search(line)
         if match:
             return int(match.group(1))
@@ -282,6 +283,8 @@ class Installer:
                 [self._hdc, "start"],
                 capture_output=True,
                 text=True,
+                encoding=_HDC_OUTPUT_ENCODING,
+                errors=_HDC_OUTPUT_ERRORS,
                 timeout=10,
                 **no_window_kwargs(),
             )
@@ -346,6 +349,8 @@ class Installer:
                 [self._hdc, "kill"],
                 capture_output=True,
                 text=True,
+                encoding=_HDC_OUTPUT_ENCODING,
+                errors=_HDC_OUTPUT_ERRORS,
                 timeout=5,
                 **no_window_kwargs(),
             )
@@ -393,6 +398,8 @@ class Installer:
                     cmd,
                     capture_output=True,
                     text=True,
+                    encoding=_HDC_OUTPUT_ENCODING,
+                    errors=_HDC_OUTPUT_ERRORS,
                     timeout=15,
                     cancel_event=self.cancel_event,
                 )
@@ -400,7 +407,7 @@ class Installer:
                 continue
             if result.returncode == 0:
                 # 从输出中提取 64 位十六进制 UDID
-                match = re.search(r"\b([0-9A-Fa-f]{64})\b", result.stdout)
+                match = re.search(r"\b([0-9A-Fa-f]{64})\b", result.stdout or "")
                 if match:
                     return match.group(1)
         raise RuntimeError(
@@ -414,6 +421,8 @@ class Installer:
             [self._hdc, "list", "targets", "-v"],
             capture_output=True,
             text=True,
+            encoding=_HDC_OUTPUT_ENCODING,
+            errors=_HDC_OUTPUT_ERRORS,
             timeout=15,
             cancel_event=self.cancel_event,
         )
@@ -425,7 +434,7 @@ class Installer:
             raise RuntimeError(f"hdc list targets 失败: {output}")
 
         targets: list[dict[str, object]] = []
-        for raw_line in result.stdout.splitlines():
+        for raw_line in (result.stdout or "").splitlines():
             parts = raw_line.strip().split()
             if not parts or parts[0].startswith("["):
                 continue
@@ -460,6 +469,8 @@ class Installer:
             self._device_command("shell", "bm", "dump", "-n", bundle_name),
             capture_output=True,
             text=True,
+            encoding=_HDC_OUTPUT_ENCODING,
+            errors=_HDC_OUTPUT_ERRORS,
             timeout=20,
             cancel_event=self.cancel_event,
         )
@@ -500,6 +511,8 @@ class Installer:
             cmd,
             capture_output=True,
             text=True,
+            encoding=_HDC_OUTPUT_ENCODING,
+            errors=_HDC_OUTPUT_ERRORS,
             timeout=60,
             cancel_event=self.cancel_event,
         )

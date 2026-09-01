@@ -9,6 +9,12 @@ import pytest
 from hapsign.signing import hap_signer, installer, keytool_util
 
 
+def _assert_hdc_utf8_call(call) -> None:
+    assert call.kwargs["text"] is True
+    assert call.kwargs["encoding"] == "utf-8"
+    assert call.kwargs["errors"] == "replace"
+
+
 def test_hap_signer_builds_subprocess_command(monkeypatch) -> None:
     run = Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(hap_signer, "run_process", run)
@@ -60,6 +66,7 @@ def test_installer_extracts_udid(monkeypatch) -> None:
     monkeypatch.setattr(installer.Installer, "_ensure_server", lambda self: None)
 
     assert installer.Installer().get_udid() == udid
+    _assert_hdc_utf8_call(run.call_args)
 
 
 def test_installer_targets_explicit_serial(monkeypatch) -> None:
@@ -74,6 +81,7 @@ def test_installer_targets_explicit_serial(monkeypatch) -> None:
         "-t",
         "device-serial",
     ]
+    _assert_hdc_utf8_call(run.call_args)
 
 
 def test_installer_does_not_treat_explicit_empty_serial_as_implicit() -> None:
@@ -116,6 +124,7 @@ def test_installer_lists_agent_friendly_targets(monkeypatch) -> None:
         "targets",
         "-v",
     ]
+    _assert_hdc_utf8_call(run.call_args)
 
 
 def test_installer_rejects_hdc_failure_marker_with_zero_exit(monkeypatch) -> None:
@@ -136,7 +145,7 @@ def test_installer_inspects_bundle_on_explicit_serial(monkeypatch) -> None:
         returncode=0,
         stdout=(
             '{"bundleName":"com.example.app","appProvisionType":"debug",'
-            '"versionName":"1.2.3"}'
+            '"versionName":"测试版 1.2.3"}'
         ),
         stderr="",
     )
@@ -151,7 +160,7 @@ def test_installer_inspects_bundle_on_explicit_serial(monkeypatch) -> None:
     assert bundle == {
         "bundle_name": "com.example.app",
         "provision_type": "debug",
-        "version_name": "1.2.3",
+        "version_name": "测试版 1.2.3",
     }
     assert run.call_args.args[0] == [
         installer.config.HDC_PATH,
@@ -163,6 +172,7 @@ def test_installer_inspects_bundle_on_explicit_serial(monkeypatch) -> None:
         "-n",
         "com.example.app",
     ]
+    _assert_hdc_utf8_call(run.call_args)
 
 
 def test_installer_raises_on_fail_marker(monkeypatch) -> None:
@@ -250,6 +260,7 @@ def test_installer_uses_serial_and_replace(monkeypatch) -> None:
         "-r",
         "app.hap",
     ]
+    _assert_hdc_utf8_call(run.call_args)
 
 
 def test_installer_accepts_success_with_error_in_path(monkeypatch) -> None:
@@ -282,6 +293,8 @@ def test_installer_closes_server_started_by_current_task(monkeypatch) -> None:
 
     commands = [call.args[0] for call in run.call_args_list]
     assert commands == [[hdc._hdc, "start"], [hdc._hdc, "kill"]]
+    for call in run.call_args_list:
+        _assert_hdc_utf8_call(call)
 
 
 def test_installer_preserves_preexisting_server(monkeypatch) -> None:
@@ -399,29 +412,32 @@ def test_installer_polls_until_listener_appears(monkeypatch) -> None:
 
 
 def test_listener_pid_parses_netstat_output(monkeypatch) -> None:
+    # 本地化表头包含非法 UTF-8 字节；监听行本身只依赖 ASCII 字段。
     output = (
-        "  TCP    127.0.0.1:8710         0.0.0.0:0              LISTENING       47024\n"
-        "  TCP    127.0.0.1:8710         127.0.0.1:65140        TIME_WAIT       0\n"
-        "  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1234\n"
+        b"\xbb\xee\xb6\xaf\xd0\xad\xd2\xe9  \xb1\xbe\xb5\xd8\xb5\xd8\xd6\xb7\r\n"
+        b"  TCP  127.0.0.1:8710  0.0.0.0:0  LISTENING  47024\r\n"
+        b"  TCP  127.0.0.1:8710  127.0.0.1:65140  TIME_WAIT  0\r\n"
+        b"  TCP  0.0.0.0:135  0.0.0.0:0  LISTENING  1234\r\n"
     )
     monkeypatch.setattr(installer.os, "name", "nt")
+    run = Mock(return_value=SimpleNamespace(returncode=0, stdout=output, stderr=b""))
     monkeypatch.setattr(
         installer.subprocess,
         "run",
-        Mock(return_value=SimpleNamespace(returncode=0, stdout=output, stderr="")),
+        run,
     )
     assert installer._listener_pid() == 47024
+    assert "text" not in run.call_args.kwargs
+    assert "encoding" not in run.call_args.kwargs
 
 
 def test_listener_pid_returns_none_when_port_free(monkeypatch) -> None:
-    output = (
-        "  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1234\n"
-    )
+    output = b"  TCP    0.0.0.0:135   0.0.0.0:0   LISTENING   1234\r\n"
     monkeypatch.setattr(installer.os, "name", "nt")
     monkeypatch.setattr(
         installer.subprocess,
         "run",
-        Mock(return_value=SimpleNamespace(returncode=0, stdout=output, stderr="")),
+        Mock(return_value=SimpleNamespace(returncode=0, stdout=output, stderr=b"")),
     )
     assert installer._listener_pid() is None
 

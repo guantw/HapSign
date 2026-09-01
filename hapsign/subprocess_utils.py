@@ -15,6 +15,52 @@ from hapsign.cancellation import OperationCancelled, raise_if_cancelled
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
+class ProcessOutputError(RuntimeError):
+    """外部进程的已捕获输出无法按调用方声明的格式提供。"""
+
+
+def _output_encoding(text: bool, options: dict[str, Any]) -> str:
+    encoding = options.get("encoding")
+    if encoding is not None:
+        return str(encoding)
+    if text or options.get("errors") is not None:
+        return "Python default"
+    return "bytes"
+
+
+def _process_output_error(
+    command: list[str],
+    text: bool,
+    options: dict[str, Any],
+    detail: str,
+) -> ProcessOutputError:
+    # 只包含可执行文件名，避免把密码等敏感命令参数带入错误信息。
+    executable = command[0] if command else "<unknown>"
+    encoding = _output_encoding(text, options)
+    return ProcessOutputError(
+        f"外部命令 {executable!r} 的输出不可用 (encoding={encoding}): {detail}"
+    )
+
+
+def _validate_captured_output(
+    result: subprocess.CompletedProcess,
+    command: list[str],
+    *,
+    capture_output: bool,
+    text: bool,
+    options: dict[str, Any],
+) -> subprocess.CompletedProcess:
+    """捕获开启时保证 stdout/stderr 存在，否则给出明确的边界错误。"""
+    if capture_output and (result.stdout is None or result.stderr is None):
+        raise _process_output_error(
+            command,
+            text,
+            options,
+            "capture_output=True 但 stdout/stderr 为 None",
+        )
+    return result
+
+
 def no_window_kwargs() -> dict[str, int]:
     """Windows 下禁止控制台工具创建一闪而过的命令行窗口。"""
     if platform.system() == "Windows":
@@ -150,8 +196,8 @@ def _terminate_windows_tree(pid: int) -> None:
     try:
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(pid)],
-            capture_output=True,
-            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             **no_window_kwargs(),
         )
     except (OSError, ValueError):
@@ -201,16 +247,27 @@ def run_process(
     """运行外部命令；有取消信号或超时要求时，终止子进程及整棵进程树。
 
     仅当既无取消信号也无超时时走 subprocess.run 快路径；否则使用 Popen +
-    Job Object / 进程组，确保取消或超时能终止整棵进程树。
+    Job Object / 进程组，确保取消或超时能终止整棵进程树。调用方要求捕获输出时，
+    stdout/stderr 必须保持稳定；解码失败或异常的 None 输出会转换为明确异常。
     """
     options = no_window_kwargs()
     options.update(kwargs)
     if cancel_event is None and timeout is None:
-        return subprocess.run(
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=capture_output,
+                text=text,
+                **options,
+            )
+        except UnicodeError as exc:
+            raise _process_output_error(command, text, options, str(exc)) from exc
+        return _validate_captured_output(
+            result,
             command,
             capture_output=capture_output,
             text=text,
-            **options,
+            options=options,
         )
 
     raise_if_cancelled(cancel_event)
@@ -248,11 +305,20 @@ def run_process(
                 stdout, stderr = process.communicate(timeout=wait_timeout)
             except subprocess.TimeoutExpired:
                 continue
-            return subprocess.CompletedProcess(
+            except UnicodeError as exc:
+                _stop_process(process, job)
+                raise _process_output_error(command, text, options, str(exc)) from exc
+            return _validate_captured_output(
+                subprocess.CompletedProcess(
+                    command,
+                    process.returncode,
+                    stdout,
+                    stderr,
+                ),
                 command,
-                process.returncode,
-                stdout,
-                stderr,
+                capture_output=capture_output,
+                text=text,
+                options=options,
             )
     finally:
         if job is not None:

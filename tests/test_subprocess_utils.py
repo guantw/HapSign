@@ -40,6 +40,106 @@ def test_cancelled_command_does_not_start_process(monkeypatch) -> None:
     popen.assert_not_called()
 
 
+def test_captured_text_output_none_raises_explicit_error(monkeypatch) -> None:
+    monkeypatch.setattr(subprocess_utils, "no_window_kwargs", lambda: {})
+    monkeypatch.setattr(
+        subprocess_utils.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess(
+                ["tool", "--secret", "not-in-error"],
+                0,
+                None,
+                None,
+            )
+        ),
+    )
+
+    with pytest.raises(
+        subprocess_utils.ProcessOutputError,
+        match=r"tool.*encoding=utf-8.*stdout/stderr.*None",
+    ) as caught:
+        subprocess_utils.run_process(
+            ["tool", "--secret", "not-in-error"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    assert "not-in-error" not in str(caught.value)
+
+
+def test_captured_text_output_none_from_popen_raises_explicit_error(
+    monkeypatch,
+) -> None:
+    process = Mock(returncode=0)
+    process.communicate.return_value = (None, None)
+    monkeypatch.setattr(subprocess_utils, "no_window_kwargs", lambda: {})
+    monkeypatch.setattr(subprocess_utils, "_popen_process_tree_options", lambda: {})
+    monkeypatch.setattr(subprocess_utils, "_create_job_object", lambda _process: None)
+    monkeypatch.setattr(
+        subprocess_utils.subprocess, "Popen", Mock(return_value=process)
+    )
+
+    with pytest.raises(
+        subprocess_utils.ProcessOutputError,
+        match=r"tool.*encoding=utf-8.*stdout/stderr.*None",
+    ):
+        subprocess_utils.run_process(
+            ["tool"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1,
+        )
+
+
+def test_text_decode_failure_names_executable_and_encoding(monkeypatch) -> None:
+    monkeypatch.setattr(subprocess_utils, "no_window_kwargs", lambda: {})
+    monkeypatch.setattr(
+        subprocess_utils.subprocess,
+        "run",
+        Mock(
+            side_effect=UnicodeDecodeError(
+                "utf-8",
+                b"\xff",
+                0,
+                1,
+                "invalid start byte",
+            )
+        ),
+    )
+
+    with pytest.raises(
+        subprocess_utils.ProcessOutputError,
+        match=r"tool.*encoding=utf-8.*invalid start byte",
+    ):
+        subprocess_utils.run_process(
+            ["tool"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+
+def test_explicit_utf8_decodes_external_tool_output() -> None:
+    code = "import sys; sys.stdout.buffer.write('安装成功'.encode('utf-8'))"
+
+    result = subprocess_utils.run_process(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=5,
+    )
+
+    assert result.stdout == "安装成功"
+    assert result.stderr == ""
+
+
 def _spawning_child_code(out_file: str) -> str:
     """生成子进程代码：拉起一个挂起 300s 的孙进程，并把其 PID 写入文件。
 
@@ -182,3 +282,16 @@ def test_stop_process_falls_back_to_windows_tree_kill(monkeypatch) -> None:
 
     assert tree_killed == [process.pid]
     process.wait.assert_called_once_with(timeout=2)
+
+
+def test_taskkill_output_is_discarded_without_text_decoding(monkeypatch) -> None:
+    run = Mock()
+    monkeypatch.setattr(subprocess_utils, "no_window_kwargs", lambda: {})
+    monkeypatch.setattr(subprocess_utils.subprocess, "run", run)
+
+    subprocess_utils._terminate_windows_tree(1234)
+
+    assert run.call_args.args[0] == ["taskkill", "/F", "/T", "/PID", "1234"]
+    assert run.call_args.kwargs["stdout"] is subprocess.DEVNULL
+    assert run.call_args.kwargs["stderr"] is subprocess.DEVNULL
+    assert "text" not in run.call_args.kwargs

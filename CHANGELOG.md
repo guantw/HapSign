@@ -93,6 +93,8 @@
 
 ### Fixed
 
+- Windows 设备检测改为从本地化 `netstat` 原始字节解析监听端口，HDC 输出固定按
+  UTF-8 解码，避免 `PYTHONUTF8=1` 或系统 GBK 文本模式导致设备检测及安装后校验失败。
 - Agent CLI 会拒绝空白 HDC serial，避免退回隐式设备选择；`auth` 仅在 Token
   缓存成功落盘后返回成功；`devices list` 不再把退出码为 0 的 HDC `[Fail]`
   输出误报为空设备列表。
