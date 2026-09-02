@@ -34,24 +34,39 @@
 Windows x64 与 Linux x64；macOS 可使用本机 DevEco Studio 工具链构建，正式发布
 前仍需补充独立的公开锁定项、代码签名和 notarization。
 
-## 直接使用 Windows 便携版（推荐）
+## 直接使用 Windows GUI 发布包（推荐）
 
-普通使用者不需要安装 Python、DevEco Studio、Java 或 HDC。到 GitHub Releases
-下载 `HapSign-portable-windows.zip` 及旁边的 `.zip.sha256` 校验文件，先在
-PowerShell 中核对下载完整性：
+普通使用者不需要安装 Python、DevEco Studio、Java 或 HDC。优先打开
+[GitHub Releases](https://github.com/guantw/HapSign/releases) 选择适合当前平台的
+现成包；该页面同时列出正式 Release 和标注为 Pre-release 的预发布版本。Windows x64
+普通用户下载 `HapSign-GUI-v<version>-windows-x64.zip` 及同一版本的 `SHA256SUMS`。
+只有没有适用的发布资产，或现成包在目标环境中确实无法使用时，才需要
+[从源码安装](#从源码安装)或自行构建。
+
+下载后先在 PowerShell 中核对归档的 SHA-256：
 
 ```powershell
-Get-FileHash .\HapSign-portable-windows.zip -Algorithm SHA256
-Get-Content .\HapSign-portable-windows.zip.sha256
+$archive = Get-Item .\HapSign-GUI-v*-windows-x64.zip
+Get-FileHash $archive.FullName -Algorithm SHA256
+Select-String -Path .\SHA256SUMS -Pattern $archive.Name -SimpleMatch
 ```
 
 确认哈希一致后，将 ZIP 解压到当前用户可写的目录（不要放入 `Program Files`），
-双击 `HapSign.exe` 即可。精简包会复用系统 Edge/Chrome；如果发布页同时提供
-`HapSign-portable-windows-compat.zip`，它包含内置 Chromium，适合没有可用系统
-浏览器的电脑。
+双击 `HapSign.exe` 即可。GUI 发布包内置 Chromium 与完整工具链。官方二进制不使用
+可信发布者身份签名；如果系统或组织策略要求发布者签名，请勿绕过安全策略，改为从源码
+构建并按组织要求自行签名。
 
-便携目录同时包含 agent 可调用的 `hapsign-cli.exe`（Linux/macOS 为
-`hapsign-cli`）；它与源码安装后的 `hapsign` 使用同一组参数和 JSON 协议。
+GUI 目录同时包含 agent 可调用的 `hapsign-cli.exe`。只需要 agent/命令行时，可从同一
+发布页下载 `HapSign-CLI-Portable-v<version>-windows-x64.zip` 或对应的 Linux x64
+归档；Portable 版本已经内置所需工具链。它与源码安装后的 `hapsign` 使用同一组参数和
+JSON 协议。
+
+如果 Agent 不是从本仓库内运行、因而无法自动发现 `.agents/skills`，请同时下载并交给
+Agent 与二进制版本一致的 Prompt：`HapSign-Prompt-Portable-v<version>.md` 会指导
+Agent 下载、校验、解压 Portable 包并安全部署 HAP；已经有 DevEco Studio 或其他完整
+外部工具链时，改用 `HapSign-Prompt-ExternalToolchain-v<version>.md`。在本仓库内运行
+时，Agent 会直接发现 `hapsign-hap-deploy`/`hapsign-signing` 技能，不需要重复提供
+Prompt。
 
 首次使用时连接已开启 USB 调试的 HarmonyOS 设备，并在设备上确认调试授权；在窗口中
 点击“检测设备”，然后拖入或选择 `.hap`，点击“开始签名并安装”。未签名 HAP 会打开

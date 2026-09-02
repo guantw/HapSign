@@ -161,6 +161,7 @@ ACL_PERMISSION_WHITELIST = frozenset(
         "ohos.permission.READ_WRITE_USER_FILE",
         "ohos.permission.ALLOW_EXTERNAL_NATIVE_CODE",
         "ohos.permission.READ_WRITE_DOWNLOAD_DIRECTORY",
+        "ohos.permission.READ_WRITE_USB_DEV",
         # 以下权限从 5.x 白名单保留，兼容旧 SDK
         "ohos.permission.READ_CONTACTS",
         "ohos.permission.WRITE_CONTACTS",
