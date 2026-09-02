@@ -659,7 +659,8 @@ def test_metadata_for_another_device_is_ignored(tmp_path, monkeypatch) -> None:
 
 def test_extract_permissions_filters_non_acl_entries(tmp_path, monkeypatch) -> None:
     pipeline = _pipeline(tmp_path, monkeypatch)
-    allowed = next(iter(ACL_PERMISSION_WHITELIST))
+    allowed = "ohos.permission.READ_WRITE_USB_DEV"
+    assert allowed in ACL_PERMISSION_WHITELIST
     module_data = {
         "module": {
             "requestPermissions": [

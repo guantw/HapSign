@@ -93,6 +93,8 @@
 
 ### Fixed
 
+- Profile ACL 提取现在包含 `ohos.permission.READ_WRITE_USB_DEV`，确保请求 USB 设备
+  读写权限的 `system_basic` HAP 将该权限传给 AGC Profile 申请接口。
 - Windows 设备检测改为从本地化 `netstat` 原始字节解析监听端口，HDC 输出固定按
   UTF-8 解码，避免 `PYTHONUTF8=1` 或系统 GBK 文本模式导致设备检测及安装后校验失败。
 - Agent CLI 会拒绝空白 HDC serial，避免退回隐式设备选择；`auth` 仅在 Token
